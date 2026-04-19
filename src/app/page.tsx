@@ -118,7 +118,7 @@ export default function HomePage() {
       {/* ───── Footer ───── */}
       <footer className="mt-auto px-4 py-6 text-center">
         <p className="text-xs text-offwhite/20">
-          Powered by Gemini 2.0 Flash with Google Search Grounding
+          Powered by Gemini 2.5 Flash with Google Search Grounding
         </p>
       </footer>
     </main>

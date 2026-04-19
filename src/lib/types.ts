@@ -45,6 +45,11 @@ export type SpinIndicators = Record<PerspectiveLabel, string[]>;
 export interface TriangulationResult {
   /** The three perspective analyses */
   perspectives: [Perspective, Perspective, Perspective];
+  /**
+   * Outlets and URLs from Search Grounding when one combined search
+   * produced all perspectives (otherwise omitted).
+   */
+  consultedSources?: Source[];
   /** Facts that all three perspectives agree on (4-8 items) */
   consensusFacts: string[];
   /** What each perspective uniquely emphasized or spun */
@@ -82,7 +87,12 @@ export interface TriangulateErrorResponse {
   /** Human-readable error message */
   error: string;
   /** Machine-readable error code for client-side handling */
-  code: 'INVALID_INPUT' | 'RATE_LIMITED' | 'SERVICE_ERROR' | 'VALIDATION_FAILED';
+  code:
+    | 'INVALID_INPUT'
+    | 'RATE_LIMITED'
+    | 'GEMINI_QUOTA_EXCEEDED'
+    | 'SERVICE_ERROR'
+    | 'VALIDATION_FAILED';
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -118,6 +128,12 @@ export interface PerspectiveRawResponse {
   uniqueClaims: string[];
   tone: string;
 }
+
+/** Raw JSON from a single grounded call that returns all three lenses */
+export type AllPerspectivesRawResponse = Record<
+  PerspectiveLabel,
+  PerspectiveRawResponse
+>;
 
 /** Raw JSON shape returned by the validation prompt */
 export interface ValidationRawResponse {

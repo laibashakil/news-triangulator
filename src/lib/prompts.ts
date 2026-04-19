@@ -92,6 +92,49 @@ Important:
 }
 
 /**
+ * Builds one grounded prompt that retrieves progressive, conservative, and
+ * international coverage together (single Search Grounding round-trip).
+ */
+export function buildAllPerspectivesPrompt(query: string): string {
+  return `Use Google Search to find recent news coverage of the following story. In one research pass, examine how the story is covered through THREE distinct lenses — you must address all three.
+
+Story: "${query}"
+
+LENS 1 — Progressive-leaning and left-of-center outlets:
+${PERSPECTIVE_GUIDANCE.progressive}
+
+LENS 2 — Conservative-leaning and right-of-center outlets:
+${PERSPECTIVE_GUIDANCE.conservative}
+
+LENS 3 — International and non-US outlets:
+${PERSPECTIVE_GUIDANCE.international}
+
+Return ONLY a JSON object with no markdown fencing, no preamble:
+{
+  "progressive": {
+    "summary": "2-3 paragraphs: how progressive-leaning sources covered this",
+    "uniqueClaims": ["3-5 framing points this lens emphasized"],
+    "tone": "single descriptive word"
+  },
+  "conservative": {
+    "summary": "2-3 paragraphs: how conservative-leaning sources covered this",
+    "uniqueClaims": ["3-5 framing points this lens emphasized"],
+    "tone": "single descriptive word"
+  },
+  "international": {
+    "summary": "2-3 paragraphs: how international sources covered this",
+    "uniqueClaims": ["3-5 framing points this lens emphasized"],
+    "tone": "single descriptive word"
+  }
+}
+
+Rules:
+- Only summarize what you actually found in search results. Do not invent outlets or quotes.
+- Each lens must reflect that ideological or geographic slice of coverage, not generic commentary.
+- uniqueClaims should highlight what THAT lens uniquely stresses compared to the others.`;
+}
+
+/**
  * Builds the synthesis prompt (Call 4).
  * Takes the three perspective summaries and extracts consensus facts,
  * spin indicators, and the stripped truth paragraph.

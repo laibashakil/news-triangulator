@@ -10,6 +10,7 @@ import React from 'react';
 import type { TriangulationResult } from '@/lib/types';
 import { PerspectiveColumn } from './PerspectiveColumn';
 import { ConsensusLayer } from './ConsensusLayer';
+import { SourceChip } from './SourceChip';
 
 interface ResultsPanelProps {
   /** The complete triangulation result */
@@ -17,7 +18,13 @@ interface ResultsPanelProps {
 }
 
 export function ResultsPanel({ result }: ResultsPanelProps) {
-  const { perspectives, consensusFacts, strippedTruth, storyQuery } = result;
+  const {
+    perspectives,
+    consensusFacts,
+    strippedTruth,
+    storyQuery,
+    consultedSources,
+  } = result;
 
   return (
     <div className="w-full max-w-7xl mx-auto space-y-8 animate-fade-in">
@@ -30,6 +37,23 @@ export function ResultsPanel({ result }: ResultsPanelProps) {
           &ldquo;{storyQuery}&rdquo;
         </p>
       </div>
+
+      {consultedSources && consultedSources.length > 0 && (
+        <div className="max-w-3xl mx-auto text-center">
+          <p className="text-xs text-offwhite/40 uppercase tracking-wider mb-2">
+            Sources from search
+          </p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {consultedSources.slice(0, 12).map((source, index) => (
+              <SourceChip
+                key={`consulted-${index}`}
+                source={source}
+                variant="international"
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Three-column perspective grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6" id="perspectives-grid">

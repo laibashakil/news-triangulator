@@ -1,25 +1,30 @@
 /**
  * Gemini API service for News Triangulator.
  *
- * Orchestrates the four-call triangulation flow:
- * 1. Story validation (optional fast-fail)
- * 2-4. Three concurrent perspective searches (with Search Grounding)
- * 5. Synthesis call (consensus, spin, stripped truth)
+ * Orchestrates a two-call triangulation flow (minimal quota use):
+ * 1. One grounded search returning progressive, conservative, and international lenses
+ * 2. Synthesis (consensus, spin, stripped truth)
  *
- * Uses the @google/genai SDK with Google Search Grounding.
+ * Optional: set GEMINI_STORY_VALIDATION=true for an extra validation call before search.
+ *
+ * Uses @google-cloud/vertexai (Vertex AI Gemini) with Google Search grounding.
+ * Authenticate with Application Default Credentials (gcloud auth application-default login,
+ * or a service account on GCP).
  */
 
-import { GoogleGenAI } from '@google/genai';
+import { VertexAI } from '@google-cloud/vertexai';
+import type { GenerateContentResult, Tool } from '@google-cloud/vertexai';
 import {
   SYSTEM_CONTEXT,
   buildStoryValidationPrompt,
-  buildPerspectivePrompt,
+  buildAllPerspectivesPrompt,
   buildSynthesisPrompt,
 } from './prompts';
 import type {
   Perspective,
   PerspectiveLabel,
   PerspectiveRawResponse,
+  AllPerspectivesRawResponse,
   ValidationRawResponse,
   SynthesisRawResponse,
   TriangulationResult,
@@ -31,12 +36,30 @@ import { GeminiServiceError } from './types';
  * Constants
  * ────────────────────────────────────────────────────────────────────── */
 
-const MODEL_ID = 'gemini-2.0-flash';
+const VERTEX_PROJECT = 'news-triangulator';
+const VERTEX_LOCATION = 'us-central1';
+const MODEL_ID = 'gemini-2.5-flash';
+
+/** REST field supported by Vertex; SDK Tool union predates this shape. */
+const GOOGLE_SEARCH_TOOL = { googleSearch: {} } as unknown as Tool;
+
 const PERSPECTIVE_LABELS: PerspectiveLabel[] = [
   'progressive',
   'conservative',
   'international',
 ];
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Vertex response helpers
+ * ────────────────────────────────────────────────────────────────────── */
+
+function getTextFromVertexResult(result: GenerateContentResult): string {
+  const parts = result.response.candidates?.[0]?.content?.parts;
+  if (!parts?.length) return '';
+  return parts
+    .map((p) => ('text' in p && typeof p.text === 'string' ? p.text : ''))
+    .join('');
+}
 
 /* ──────────────────────────────────────────────────────────────────────
  * JSON Parsing Utility
@@ -152,36 +175,38 @@ function validateSynthesisResponse(data: SynthesisRawResponse): boolean {
 
 /**
  * Service class encapsulating all Gemini API interactions.
- * Manages the four-call triangulation flow with proper error handling.
+ * Manages the triangulation flow with proper error handling.
  */
 export class GeminiService {
-  private readonly client: GoogleGenAI;
+  private readonly model;
 
   constructor() {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error(
-        'GEMINI_API_KEY environment variable is required. See docs/ENV_SETUP.md.'
-      );
-    }
-    this.client = new GoogleGenAI({ apiKey });
+    const vertex = new VertexAI({
+      project: VERTEX_PROJECT,
+      location: VERTEX_LOCATION,
+    });
+    this.model = vertex.getGenerativeModel({
+      model: MODEL_ID,
+      systemInstruction: SYSTEM_CONTEXT,
+    });
   }
 
   /**
    * Validates that the user's input is a news story or claim.
-   * This is a fast-fail check before making expensive Search Grounding calls.
+   * Non-blocking: if validation itself fails (API error), we skip it
+   * and proceed with the triangulation rather than blocking the user.
    */
   private async validateStory(query: string): Promise<void> {
     try {
-      const response = await this.client.models.generateContent({
-        model: MODEL_ID,
-        contents: buildStoryValidationPrompt(query),
-        config: {
-          systemInstruction: SYSTEM_CONTEXT,
+      const result = await this.model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: buildStoryValidationPrompt(query) }] }],
+        generationConfig: {
+          maxOutputTokens: 8192,
+          responseMimeType: 'application/json',
         },
       });
 
-      const text = response.text ?? '';
+      const text = getTextFromVertexResult(result);
       const parsed = parseGeminiJson<ValidationRawResponse>(
         text,
         'story validation'
@@ -195,65 +220,69 @@ export class GeminiService {
       }
     } catch (error) {
       if (error instanceof GeminiServiceError) throw error;
-      throw new GeminiServiceError(
-        'Failed to validate the story input',
-        'validation',
-        error
+      // Log the real error but don't block — validation is optional
+      console.warn(
+        '[GeminiService] Validation call failed, skipping:',
+        error instanceof Error ? error.message : error
       );
     }
   }
 
   /**
-   * Fetches coverage for a single perspective using Search Grounding.
-   * Returns a complete Perspective object with sources extracted from
-   * grounding metadata.
+   * Fetches all three perspectives in one Search Grounding call (counts as a
+   * single generate_content request toward daily quota).
    */
-  private async fetchPerspective(
-    query: string,
-    label: PerspectiveLabel
-  ): Promise<Perspective> {
+  private async fetchAllPerspectives(query: string): Promise<{
+    perspectives: [Perspective, Perspective, Perspective];
+    consultedSources: Source[];
+  }> {
     try {
-      const response = await this.client.models.generateContent({
-        model: MODEL_ID,
-        contents: buildPerspectivePrompt(query, label),
-        config: {
-          systemInstruction: SYSTEM_CONTEXT,
-          tools: [{ googleSearch: {} }],
-        },
+      const result = await this.model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: buildAllPerspectivesPrompt(query) }] }],
+        tools: [GOOGLE_SEARCH_TOOL],
+        generationConfig: { maxOutputTokens: 8192 },
       });
 
-      const text = response.text ?? '';
-      const parsed = parseGeminiJson<PerspectiveRawResponse>(
+      const text = getTextFromVertexResult(result);
+      const parsed = parseGeminiJson<AllPerspectivesRawResponse>(
         text,
-        `${label} perspective`
+        'all perspectives'
       );
 
-      if (!validatePerspectiveResponse(parsed)) {
-        throw new GeminiServiceError(
-          `Malformed ${label} perspective response — missing required fields`,
-          'perspective'
-        );
+      const perspectives: Perspective[] = [];
+      for (const label of PERSPECTIVE_LABELS) {
+        const raw = parsed[label] as PerspectiveRawResponse | undefined;
+        if (!raw || !validatePerspectiveResponse(raw)) {
+          throw new GeminiServiceError(
+            `Malformed ${label} perspective response — missing required fields`,
+            'perspective'
+          );
+        }
+        perspectives.push({
+          label,
+          sources: [],
+          summary: raw.summary,
+          uniqueClaims: raw.uniqueClaims,
+          tone: raw.tone,
+        });
       }
 
-      // Extract real sources from grounding metadata
-      const candidates = (
-        response as unknown as {
-          candidates?: Record<string, unknown>[];
-        }
-      ).candidates ?? [];
-      const sources = extractSourcesFromGrounding(candidates);
+      const candidates = (result.response.candidates ??
+        []) as unknown as Record<string, unknown>[];
+      const consultedSources = extractSourcesFromGrounding(candidates);
 
       return {
-        label,
-        sources,
-        summary: parsed.summary,
-        uniqueClaims: parsed.uniqueClaims,
-        tone: parsed.tone,
+        perspectives: perspectives as [
+          Perspective,
+          Perspective,
+          Perspective,
+        ],
+        consultedSources,
       };
     } catch (error) {
       if (error instanceof GeminiServiceError) throw error;
       throw new GeminiServiceError(
-        `Failed to fetch ${label} perspective`,
+        'Failed to fetch perspectives (combined search)',
         'perspective',
         error
       );
@@ -268,15 +297,15 @@ export class GeminiService {
     perspectives: Perspective[]
   ): Promise<SynthesisRawResponse> {
     try {
-      const response = await this.client.models.generateContent({
-        model: MODEL_ID,
-        contents: buildSynthesisPrompt(perspectives),
-        config: {
-          systemInstruction: SYSTEM_CONTEXT,
+      const result = await this.model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: buildSynthesisPrompt(perspectives) }] }],
+        generationConfig: {
+          maxOutputTokens: 8192,
+          responseMimeType: 'application/json',
         },
       });
 
-      const text = response.text ?? '';
+      const text = getTextFromVertexResult(result);
       const parsed = parseGeminiJson<SynthesisRawResponse>(
         text,
         'synthesis'
@@ -301,30 +330,22 @@ export class GeminiService {
   }
 
   /**
-   * Orchestrates the full four-call triangulation flow.
-   *
-   * 1. Validates the story input
-   * 2. Fetches three perspectives concurrently via Promise.all
-   * 3. Synthesizes consensus, spin, and stripped truth
-   * 4. Returns the complete TriangulationResult
+   * Orchestrates the triangulation flow: optional validation, one grounded
+   * multi-lens search, then synthesis.
    */
   async triangulate(query: string): Promise<TriangulationResult> {
-    // Step 1: Validate the input
-    await this.validateStory(query);
+    if (process.env.GEMINI_STORY_VALIDATION === 'true') {
+      await this.validateStory(query);
+    }
 
-    // Step 2: Fetch all three perspectives concurrently
-    const perspectives = (await Promise.all(
-      PERSPECTIVE_LABELS.map((label) =>
-        this.fetchPerspective(query, label)
-      )
-    )) as [Perspective, Perspective, Perspective];
+    const { perspectives, consultedSources } =
+      await this.fetchAllPerspectives(query);
 
-    // Step 3: Synthesize the perspectives
     const synthesis = await this.synthesize(perspectives);
 
-    // Step 4: Assemble the final result
     return {
       perspectives,
+      ...(consultedSources.length > 0 ? { consultedSources } : {}),
       consensusFacts: synthesis.consensusFacts,
       spinIndicators: synthesis.spinIndicators,
       strippedTruth: synthesis.strippedTruth,

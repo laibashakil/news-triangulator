@@ -79,6 +79,31 @@ function errorResponse(
   );
 }
 
+/**
+ * Reads HTTP-style status from Vertex / Gemini errors wrapped in
+ * GeminiServiceError (supports @google/genai APIError.status and
+ * @google-cloud/vertexai GoogleApiError.code).
+ */
+function geminiCauseHttpStatus(cause: unknown): number | undefined {
+  let cur: unknown = cause;
+  const seen = new Set<unknown>();
+  for (let i = 0; i < 6 && cur != null && !seen.has(cur); i++) {
+    seen.add(cur);
+    if (typeof cur === 'object') {
+      const o = cur as Record<string, unknown>;
+      const status = o.status;
+      if (typeof status === 'number' && status >= 400) return status;
+      const code = o.code;
+      if (typeof code === 'number' && code >= 400) return code;
+    }
+    cur =
+      typeof cur === 'object' && cur !== null && 'cause' in cur
+        ? (cur as { cause: unknown }).cause
+        : undefined;
+  }
+  return undefined;
+}
+
 /* ──────────────────────────────────────────────────────────────────────
  * Route Handler
  * ────────────────────────────────────────────────────────────────────── */
@@ -160,12 +185,22 @@ export async function POST(
   } catch (error) {
     if (error instanceof GeminiServiceError) {
       console.error(
-        `[triangulate] GeminiServiceError (${error.phase}): ${error.message}`
+        `[triangulate] GeminiServiceError (${error.phase}): ${error.message}`,
+        error.cause instanceof Error ? error.cause.message : error.cause ?? ''
       );
 
       // Validation failures are client errors (bad input)
       if (error.phase === 'validation') {
         return errorResponse(error.message, 'VALIDATION_FAILED', 400);
+      }
+
+      const upstreamStatus = geminiCauseHttpStatus(error.cause);
+      if (upstreamStatus === 429) {
+        return errorResponse(
+          'The Gemini API quota or rate limit was exceeded. Wait a minute and try again, or check billing and limits in Google AI Studio.',
+          'GEMINI_QUOTA_EXCEEDED',
+          429
+        );
       }
 
       return errorResponse(
