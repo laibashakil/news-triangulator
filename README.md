@@ -4,6 +4,20 @@
 
 News Triangulator uses **Gemini 2.5 Flash** with **Google Search Grounding** on **Vertex AI** to perform live searches across ideologically distinct news sources, compare their coverage, and extract the factual core that survives triangulation.
 
+## Live Deployment
+
+| | |
+|---|---|
+| **URL** | https://news-triangulator-806899382949.us-central1.run.app |
+| **Platform** | Google Cloud Run (us-central1) |
+| **Image** | `us-central1-docker.pkg.dev/news-triangulator/news-triangulator-repo/news-triangulator:latest` |
+| **Auth** | Compute Engine default service account (no API key needed) |
+
+To redeploy after changes:
+```bash
+gcloud builds submit --tag us-central1-docker.pkg.dev/news-triangulator/news-triangulator-repo/news-triangulator:latest --region=us-central1 .
+gcloud run deploy news-triangulator --image=us-central1-docker.pkg.dev/news-triangulator/news-triangulator-repo/news-triangulator:latest --platform=managed --region=us-central1 --allow-unauthenticated --port=8080 --set-env-vars=NODE_ENV=production --memory=1Gi --cpu=1
+```
 
 ## Tech Stack
 
