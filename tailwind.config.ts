@@ -19,7 +19,7 @@ const config: Config = {
       colors: {
         /* ──── Base palette ──── */
         navy: {
-          DEFAULT: '#0A0E1A',
+          DEFAULT: '#101726',
           light: '#111827',
           lighter: '#1F2937',
         },
