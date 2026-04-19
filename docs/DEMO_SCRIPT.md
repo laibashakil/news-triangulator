@@ -43,7 +43,7 @@ Paste the query. Before hitting submit, say:
 
 **Point at the screen** as each stage appears:
 
-> "See the progress indicator? It's not fake. Right now it's actually making live Google searches through Gemini — first searching progressive sources... now conservative sources... now international outlets. These are real searches happening right now, not cached results."
+> "See the progress indicator? It's not fake. Right now Gemini is running one grounded Google Search pass and pulling coverage through three lenses at once — progressive, conservative, and international. These are real searches happening live against Vertex AI, not cached results."
 
 **This is your biggest credibility moment.** The fact that the loading states correspond to real API calls makes you look like you understand what's happening under the hood.
 
@@ -70,7 +70,7 @@ When results appear:
 
 ### Closing Technical Point (15 seconds)
 
-> "Under the hood, this is four calls to Gemini 2.0 Flash with Google Search Grounding — three perspective searches running in parallel for speed, then one synthesis call to extract the truth layer. The whole thing runs on Next.js and can be deployed to Cloud Run with a single command."
+> "Under the hood, this is two calls to Gemini 2.5 Flash on Vertex AI — one grounded Google Search call that pulls all three perspectives in a single research pass, then one synthesis call to extract the truth layer. The whole thing runs on Next.js and can be deployed to Cloud Run with a single command, using service-account auth, no API keys."
 
 ---
 
@@ -90,4 +90,4 @@ When results appear:
 
 ### "How much does it cost to run?"
 
-> "Gemini Flash 2.0 is extremely cheap — a few cents per search-grounded call. Four calls per triangulation means roughly $0.02-0.05 per analysis. The free tier gets you hundreds of analyses per day."
+> "Gemini 2.5 Flash on Vertex AI is inexpensive — the big line item is the grounded Google Search call, which is metered separately from regular generate-content usage. A full triangulation is one grounded call plus one cheap synthesis call, so roughly a couple of cents per analysis. For a hackathon demo, Cloud Run scales to zero when idle, so the only charges are while it's actually running."

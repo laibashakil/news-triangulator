@@ -1,12 +1,14 @@
 # Gemini Prompts Documentation
 
-This file documents every prompt sent to the Gemini API, the reasoning behind each prompt's structure, and how they chain together. **This is the single source of truth for all AI instructions.** Prompt changes should be made in `src/lib/prompts.ts` — never in the service code.
+This file documents every prompt sent to the Gemini API, the reasoning behind each prompt's structure, and how they chain together. **This is the single source of truth for all AI instructions.** Prompt changes should be made in [src/lib/prompts.ts](../src/lib/prompts.ts) — never in the service code.
+
+All calls run against **Gemini 2.5 Flash** on **Vertex AI** via the `@google/genai` SDK (`GoogleGenAI` client with `vertexai: true`).
 
 ---
 
 ## SYSTEM_CONTEXT
 
-**Purpose**: Sets Gemini's role identity across all calls.
+**Purpose**: Sets Gemini's role identity across all calls. Passed via `config.systemInstruction` on every `generateContent` request.
 
 ```
 You are a senior investigative journalist and media analyst. Your job is to
@@ -27,7 +29,7 @@ identify bias in all directions without taking sides.
 
 ## buildStoryValidationPrompt(query)
 
-**Purpose**: Quick check (Call 0) to verify the input is actually a news story or claim.
+**Purpose**: Optional Call 0 that verifies the input is actually a news story or claim. Only runs when `GEMINI_STORY_VALIDATION=true`.
 
 **Parameters**:
 - `query`: The user's input text
@@ -42,106 +44,105 @@ Text: "${query}"
 
 Respond with ONLY a JSON object, no markdown fencing, no preamble:
 {
-  "isValidNewsQuery": true/false,
+  "isValidNewsQuery": true or false,
   "reason": "Brief explanation of why this is or isn't a news query"
 }
 ```
 
 **Why this prompt?**
-- Prevents wasting three expensive Search Grounding calls on gibberish
+- Prevents wasting the expensive Search Grounding call on gibberish
 - The "does NOT need to be a real story" clause prevents false rejections of obscure stories
 - Asking for a reason helps with debugging and user-facing error messages
 - JSON-only instruction prevents markdown wrapping that would break parsing
 
 **Configuration**:
-- Model: `gemini-2.0-flash`
+- Model: `gemini-2.5-flash`
 - Search Grounding: **DISABLED** (no live search needed — this is purely analytical)
-- Temperature: Low (we want a consistent yes/no, not creative interpretation)
+- `responseMimeType: 'application/json'`
+- `maxOutputTokens: 8192`
 
 ---
 
-## buildPerspectivePrompt(query, perspective)
+## buildAllPerspectivesPrompt(query)
 
-**Purpose**: Searches for and summarizes news coverage from a specific ideological orientation (Call 1-3).
+**Purpose**: The one grounded research call. Retrieves progressive, conservative, and international coverage in a single `generateContent` request so the whole triangulation uses exactly one grounded-search round trip against quota.
 
 **Parameters**:
 - `query`: The user's input text
-- `perspective`: One of `'progressive'`, `'conservative'`, or `'international'`
 
 **Prompt Template**:
 ```
-Search for recent news coverage of the following story from ${perspectiveDescription} sources.
+Use Google Search to find recent news coverage of the following story. In one
+research pass, examine how the story is covered through THREE distinct lenses —
+you must address all three.
 
 Story: "${query}"
 
-${perspectiveGuidance}
-
-Based on what you find, return ONLY a JSON object with no markdown fencing, no preamble:
-{
-  "summary": "A 2-3 paragraph summary of how these sources covered this story",
-  "uniqueClaims": ["Claim or framing point that this perspective uniquely emphasized"],
-  "tone": "A single word describing the overall tone (e.g., alarmed, measured, dismissive, celebratory, cautious, critical)"
-}
-
-Important:
-- Only summarize what the sources actually say. Do not inject your own analysis.
-- The uniqueClaims should be things THIS perspective emphasizes that others might not.
-- Include 3-5 unique claims.
-- The tone should be a single descriptive word.
-```
-
-**Perspective Guidance** (varies by perspective):
-
-For **progressive**:
-```
+LENS 1 — Progressive-leaning and left-of-center outlets:
 Focus on coverage from progressive-leaning, left-of-center, or liberal outlets.
-These might include outlets like The Guardian, MSNBC, HuffPost, The New York Times
-opinion pages, Vox, The Washington Post, Mother Jones, or similar publications
-known for progressive editorial perspectives.
-```
+These might include outlets like The Guardian, MSNBC, HuffPost, The New York
+Times opinion pages, Vox, The Washington Post, Mother Jones, or similar
+publications known for progressive editorial perspectives.
 
-For **conservative**:
-```
+LENS 2 — Conservative-leaning and right-of-center outlets:
 Focus on coverage from conservative-leaning, right-of-center outlets.
 These might include outlets like Fox News, The Daily Wire, National Review,
-The Wall Street Journal opinion pages, New York Post, The Federalist,
-or similar publications known for conservative editorial perspectives.
-```
+The Wall Street Journal opinion pages, New York Post, The Federalist, or
+similar publications known for conservative editorial perspectives.
 
-For **international**:
-```
+LENS 3 — International and non-US outlets:
 Focus on coverage from international and non-US outlets to provide a global
 perspective. These might include outlets like BBC, Al Jazeera, Reuters,
-Deutsche Welle, The Economist, France 24, South China Morning Post, Dawn,
-or similar publications that cover the story from outside the American
-political framework.
+Deutsche Welle, The Economist, France 24, South China Morning Post, Dawn, or
+similar publications that cover the story from outside the American political
+framework.
+
+Return ONLY a JSON object with no markdown fencing, no preamble:
+{
+  "progressive":  { "summary": "...", "uniqueClaims": [...], "tone": "..." },
+  "conservative": { "summary": "...", "uniqueClaims": [...], "tone": "..." },
+  "international":{ "summary": "...", "uniqueClaims": [...], "tone": "..." }
+}
+
+Rules:
+- Only summarize what you actually found in search results. Do not invent outlets or quotes.
+- Each lens must reflect that ideological or geographic slice of coverage, not generic commentary.
+- uniqueClaims should highlight what THAT lens uniquely stresses compared to the others.
 ```
 
-**Why this prompt structure?**
+**Why one prompt instead of three parallel calls?**
+- Vertex AI charges and rate-limits per `generate_content` request, and grounded search calls count toward the stricter grounding quota. Bundling three lenses into one call uses one-third the quota budget of a parallel-fetch design.
+- Explicit per-lens output slots in the JSON schema keep the perspectives differentiated despite the single call.
+- Search Grounding can still parallelize the underlying web fetches internally, so wall-clock latency stays reasonable.
+
+**Why list example outlets?**
 - Listing example outlets guides Search Grounding toward the right search queries without mandating specific sources
 - Saying "these might include" prevents errors when Gemini can't find coverage from those specific outlets
-- Requesting `uniqueClaims` as an array makes cross-perspective comparison possible in the synthesis step
+- Requesting `uniqueClaims` per lens makes cross-perspective comparison possible in the synthesis step
 - Single-word `tone` creates a clean, displayable badge without subjective paragraphs
 
 **Configuration**:
-- Model: `gemini-2.0-flash`
+- Model: `gemini-2.5-flash`
 - Search Grounding: **ENABLED** (`tools: [{ googleSearch: {} }]`)
-- These three calls run concurrently via `Promise.all`
+- `maxOutputTokens: 8192`
+- Note: `responseMimeType: 'application/json'` is not set here because it is not currently supported alongside grounded search; the service parses JSON defensively from the response text instead.
 
 **Source Extraction**:
-Sources are NOT returned by the prompt — they're extracted from the `groundingMetadata.groundingChunks` array in the API response. This is more reliable than asking the model to list sources, because:
+Sources are NOT returned by the prompt — they're extracted from the `groundingMetadata.groundingChunks` array on each candidate in the API response and exposed on the result as `consultedSources`. This is more reliable than asking the model to list sources, because:
 1. These are URLs Gemini actually visited during search
 2. They include the outlet title as parsed from the page
 3. They can't be hallucinated — they're system-level metadata
+
+> Note: [src/lib/prompts.ts](../src/lib/prompts.ts) also exports a `buildPerspectivePrompt` helper from an earlier three-call design. It is currently **unused** by `GeminiService`; the active flow uses `buildAllPerspectivesPrompt` instead.
 
 ---
 
 ## buildSynthesisPrompt(perspectives)
 
-**Purpose**: Takes the three perspective summaries and extracts consensus, spin, and stripped truth (Call 4).
+**Purpose**: Takes the three perspective summaries from the grounded call and extracts consensus, spin, and stripped truth. This is the final call of the triangulation.
 
 **Parameters**:
-- `perspectives`: Array of 3 `Perspective` objects (with summaries, unique claims, etc.)
+- `perspectives`: Array of 3 `Perspective` objects (with summaries, unique claims, tone)
 
 **Prompt Template**:
 ```
@@ -150,31 +151,30 @@ Each perspective comes from a different ideological orientation of media coverag
 
 PROGRESSIVE PERSPECTIVE:
 Summary: ${perspectives[0].summary}
-Unique Claims: ${perspectives[0].uniqueClaims.join(', ')}
+Unique Claims: ${perspectives[0].uniqueClaims.join('; ')}
 Tone: ${perspectives[0].tone}
 
 CONSERVATIVE PERSPECTIVE:
 Summary: ${perspectives[1].summary}
-Unique Claims: ${perspectives[1].uniqueClaims.join(', ')}
+Unique Claims: ${perspectives[1].uniqueClaims.join('; ')}
 Tone: ${perspectives[1].tone}
 
 INTERNATIONAL PERSPECTIVE:
 Summary: ${perspectives[2].summary}
-Unique Claims: ${perspectives[2].uniqueClaims.join(', ')}
+Unique Claims: ${perspectives[2].uniqueClaims.join('; ')}
 Tone: ${perspectives[2].tone}
 
-Analyze these three perspectives and return ONLY a JSON object with no markdown fencing:
+Analyze these three perspectives and return ONLY a JSON object with no markdown fencing, no preamble:
 {
   "consensusFacts": [
-    "Factual statement that all three perspectives agree on",
-    "Another consensus fact"
+    "Factual statement that all three perspectives agree on"
   ],
   "spinIndicators": {
-    "progressive": ["What the progressive coverage uniquely emphasized or spun"],
+    "progressive":  ["What the progressive coverage uniquely emphasized or spun"],
     "conservative": ["What the conservative coverage uniquely emphasized or spun"],
-    "international": ["What the international coverage uniquely emphasized or spun"]
+    "international":["What the international coverage uniquely emphasized or spun"]
   },
-  "strippedTruth": "A 2-3 paragraph factual summary of the story stripped of all editorial framing. Write this as a neutral wire-service report would — just the verified facts, actions taken, and their documented consequences. No adjectives that imply judgment. No framing that favors any side."
+  "strippedTruth": "A 2-3 paragraph factual summary stripped of all editorial framing..."
 }
 
 Rules:
@@ -190,9 +190,10 @@ Rules:
 - Quantitative guidance (4-8 facts, 2-3 paragraphs) prevents both sparse and overwhelming output
 
 **Configuration**:
-- Model: `gemini-2.0-flash`
+- Model: `gemini-2.5-flash`
 - Search Grounding: **DISABLED** (this call operates on already-gathered data, not live search)
-- Temperature: Moderate (we want some natural language flow in the stripped truth)
+- `responseMimeType: 'application/json'`
+- `maxOutputTokens: 8192`
 
 ---
 
@@ -202,24 +203,25 @@ Rules:
 User Input
     │
     ▼
-[Call 0] buildStoryValidationPrompt(query)
+[Call 0 — optional, only if GEMINI_STORY_VALIDATION=true]
+    buildStoryValidationPrompt(query)
     │ → validates input is a news query
     │ → if invalid, returns error to user
     │
     ▼
-[Call 1-3] buildPerspectivePrompt(query, 'progressive')  ─┐
-           buildPerspectivePrompt(query, 'conservative') ──┼── Promise.all
-           buildPerspectivePrompt(query, 'international') ─┘
-    │ → each returns JSON with summary, uniqueClaims, tone
+[Call 1] buildAllPerspectivesPrompt(query)   ← Google Search Grounding
+    │ → returns { progressive, conservative, international }
     │ → sources extracted from groundingMetadata
     │
     ▼
-[Call 4] buildSynthesisPrompt([progressive, conservative, international])
+[Call 2] buildSynthesisPrompt([progressive, conservative, international])
     │ → returns consensusFacts, spinIndicators, strippedTruth
     │
     ▼
 TriangulationResult object assembled and returned to client
 ```
+
+Total Gemini calls per request: **2** (or **3** with validation enabled).
 
 ## JSON Parsing Strategy
 

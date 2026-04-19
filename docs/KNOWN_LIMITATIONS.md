@@ -37,12 +37,12 @@ An honest assessment of what News Triangulator does well, what it doesn't, and w
 
 ## No Offline / Cached Results
 
-**The limitation**: Every triangulation request makes 4 live API calls to Gemini with live Google searches. There is no caching layer.
+**The limitation**: Every triangulation request makes 2 live Vertex AI calls — one grounded Google Search call and one synthesis call (a third runs when `GEMINI_STORY_VALIDATION=true`). There is no caching layer.
 
 **What this means**:
 - The same query entered twice will produce different results (because Gemini may find different sources each time)
 - Results cannot be retrieved after the browser tab is closed
-- Each analysis costs API quota
+- Each analysis costs Vertex AI quota — the grounded-search call counts against the stricter grounding quota
 
 **Why we accept this**: Caching news analysis would create a stale-data problem. News coverage changes hour by hour — yesterday's spin layer may not match today's. For a production version, you'd want a TTL-based cache (maybe 1 hour), but for a demo the live-search aspect is actually a feature, not a bug.
 

@@ -23,7 +23,7 @@ export default function HomePage() {
   return (
     <main className="min-h-screen flex flex-col">
       {/* ───── Hero Section ───── */}
-      <section className="relative px-4 pt-16 pb-12 md:pt-24 md:pb-16">
+      <section className="relative px-4 pt-16 pb-8 md:pt-24 md:pb-8">
         {/* Subtle gradient background */}
         <div className="absolute inset-0 bg-gradient-to-b from-navy via-navy to-navy-light pointer-events-none" />
 
@@ -100,11 +100,11 @@ export default function HomePage() {
 
       {/* ───── Results ───── */}
       {state === 'complete' && result && (
-        <section className="px-4 py-8">
+        <section className="px-4 py-6">
           <ResultsPanel result={result} />
 
           {/* New analysis button */}
-          <div className="text-center mt-8 pb-12">
+          <div className="text-center mt-6 pb-6">
             <button
               onClick={reset}
               className="text-sm text-offwhite/40 hover:text-offwhite/70 transition-colors underline underline-offset-4"
@@ -116,9 +116,9 @@ export default function HomePage() {
       )}
 
       {/* ───── Footer ───── */}
-      <footer className="mt-auto px-4 py-6 text-center">
+      <footer className="mt-auto px-4 py-3 text-center">
         <p className="text-xs text-offwhite/20">
-          Powered by Gemini 2.5 Flash with Google Search Grounding
+          Powered by Vertex AI (Gemini 2.5 Flash) with Google Search Grounding
         </p>
       </footer>
     </main>

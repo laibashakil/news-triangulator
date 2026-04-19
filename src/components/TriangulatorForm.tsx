@@ -55,7 +55,7 @@ export function TriangulatorForm({ onSubmit, state }: TriangulatorFormProps) {
             onChange={(e) => setQuery(e.target.value)}
             placeholder={PLACEHOLDER_TEXT}
             disabled={isProcessing}
-            rows={5}
+            rows={8}
             className={`
               w-full px-5 py-4 rounded-xl
               bg-navy-light border-2 transition-all duration-300

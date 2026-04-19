@@ -7,13 +7,13 @@
  *
  * Optional: set GEMINI_STORY_VALIDATION=true for an extra validation call before search.
  *
- * Uses @google-cloud/vertexai (Vertex AI Gemini) with Google Search grounding.
+ * Uses @google/genai (Google Gen AI SDK in Vertex AI mode) with Google Search grounding.
  * Authenticate with Application Default Credentials (gcloud auth application-default login,
  * or a service account on GCP).
  */
 
-import { VertexAI } from '@google-cloud/vertexai';
-import type { GenerateContentResult, Tool } from '@google-cloud/vertexai';
+import { GoogleGenAI } from '@google/genai';
+import type { GenerateContentResponse, Tool } from '@google/genai';
 import {
   SYSTEM_CONTEXT,
   buildStoryValidationPrompt,
@@ -40,8 +40,7 @@ const VERTEX_PROJECT = 'news-triangulator';
 const VERTEX_LOCATION = 'us-central1';
 const MODEL_ID = 'gemini-2.5-flash';
 
-/** REST field supported by Vertex; SDK Tool union predates this shape. */
-const GOOGLE_SEARCH_TOOL = { googleSearch: {} } as unknown as Tool;
+const GOOGLE_SEARCH_TOOL: Tool = { googleSearch: {} };
 
 const PERSPECTIVE_LABELS: PerspectiveLabel[] = [
   'progressive',
@@ -50,15 +49,11 @@ const PERSPECTIVE_LABELS: PerspectiveLabel[] = [
 ];
 
 /* ──────────────────────────────────────────────────────────────────────
- * Vertex response helpers
+ * Response helpers
  * ────────────────────────────────────────────────────────────────────── */
 
-function getTextFromVertexResult(result: GenerateContentResult): string {
-  const parts = result.response.candidates?.[0]?.content?.parts;
-  if (!parts?.length) return '';
-  return parts
-    .map((p) => ('text' in p && typeof p.text === 'string' ? p.text : ''))
-    .join('');
+function getResponseText(response: GenerateContentResponse): string {
+  return response.text ?? '';
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -178,16 +173,13 @@ function validateSynthesisResponse(data: SynthesisRawResponse): boolean {
  * Manages the triangulation flow with proper error handling.
  */
 export class GeminiService {
-  private readonly model;
+  private readonly ai: GoogleGenAI;
 
   constructor() {
-    const vertex = new VertexAI({
+    this.ai = new GoogleGenAI({
+      vertexai: true,
       project: VERTEX_PROJECT,
       location: VERTEX_LOCATION,
-    });
-    this.model = vertex.getGenerativeModel({
-      model: MODEL_ID,
-      systemInstruction: SYSTEM_CONTEXT,
     });
   }
 
@@ -198,15 +190,17 @@ export class GeminiService {
    */
   private async validateStory(query: string): Promise<void> {
     try {
-      const result = await this.model.generateContent({
+      const result = await this.ai.models.generateContent({
+        model: MODEL_ID,
         contents: [{ role: 'user', parts: [{ text: buildStoryValidationPrompt(query) }] }],
-        generationConfig: {
+        config: {
+          systemInstruction: SYSTEM_CONTEXT,
           maxOutputTokens: 8192,
           responseMimeType: 'application/json',
         },
       });
 
-      const text = getTextFromVertexResult(result);
+      const text = getResponseText(result);
       const parsed = parseGeminiJson<ValidationRawResponse>(
         text,
         'story validation'
@@ -237,13 +231,17 @@ export class GeminiService {
     consultedSources: Source[];
   }> {
     try {
-      const result = await this.model.generateContent({
+      const result = await this.ai.models.generateContent({
+        model: MODEL_ID,
         contents: [{ role: 'user', parts: [{ text: buildAllPerspectivesPrompt(query) }] }],
-        tools: [GOOGLE_SEARCH_TOOL],
-        generationConfig: { maxOutputTokens: 8192 },
+        config: {
+          systemInstruction: SYSTEM_CONTEXT,
+          tools: [GOOGLE_SEARCH_TOOL],
+          maxOutputTokens: 8192,
+        },
       });
 
-      const text = getTextFromVertexResult(result);
+      const text = getResponseText(result);
       const parsed = parseGeminiJson<AllPerspectivesRawResponse>(
         text,
         'all perspectives'
@@ -267,7 +265,7 @@ export class GeminiService {
         });
       }
 
-      const candidates = (result.response.candidates ??
+      const candidates = (result.candidates ??
         []) as unknown as Record<string, unknown>[];
       const consultedSources = extractSourcesFromGrounding(candidates);
 
@@ -297,15 +295,17 @@ export class GeminiService {
     perspectives: Perspective[]
   ): Promise<SynthesisRawResponse> {
     try {
-      const result = await this.model.generateContent({
+      const result = await this.ai.models.generateContent({
+        model: MODEL_ID,
         contents: [{ role: 'user', parts: [{ text: buildSynthesisPrompt(perspectives) }] }],
-        generationConfig: {
+        config: {
+          systemInstruction: SYSTEM_CONTEXT,
           maxOutputTokens: 8192,
           responseMimeType: 'application/json',
         },
       });
 
-      const text = getTextFromVertexResult(result);
+      const text = getResponseText(result);
       const parsed = parseGeminiJson<SynthesisRawResponse>(
         text,
         'synthesis'

@@ -1,21 +1,18 @@
-import { VertexAI } from '@google-cloud/vertexai';
+import { GoogleGenAI } from '@google/genai';
 
-const vertex = new VertexAI({
+const ai = new GoogleGenAI({
+  vertexai: true,
   project: 'news-triangulator',
   location: 'us-central1',
 });
-const model = vertex.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
-console.log('Testing Vertex Gemini...');
+console.log('Testing Vertex Gemini via @google/genai...');
 try {
-  const result = await model.generateContent({
+  const result = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
     contents: [{ role: 'user', parts: [{ text: 'Say hello in one short sentence.' }] }],
   });
-  const text =
-    result.response.candidates?.[0]?.content?.parts
-      ?.map((p) => p.text ?? '')
-      .join('') ?? '';
-  console.log(text);
+  console.log(result.text ?? '');
 } catch (e) {
   console.error(e);
   console.error(e.cause);

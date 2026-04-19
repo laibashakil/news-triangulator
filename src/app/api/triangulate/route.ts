@@ -80,9 +80,9 @@ function errorResponse(
 }
 
 /**
- * Reads HTTP-style status from Vertex / Gemini errors wrapped in
- * GeminiServiceError (supports @google/genai APIError.status and
- * @google-cloud/vertexai GoogleApiError.code).
+ * Reads HTTP-style status from Gemini errors wrapped in
+ * GeminiServiceError (supports @google/genai ApiError.status and
+ * legacy code-based shapes).
  */
 function geminiCauseHttpStatus(cause: unknown): number | undefined {
   let cur: unknown = cause;

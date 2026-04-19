@@ -1,6 +1,8 @@
 # Deployment Guide — Google Cloud Run
 
-This guide walks you through deploying News Triangulator to **Google Cloud Run** from scratch. It assumes you have a Google Cloud project set up with billing enabled and the `gcloud` CLI installed, but have never deployed to Cloud Run before.
+This guide walks you through deploying News Triangulator to **Google Cloud Run** from scratch. It assumes you have a Google Cloud project with billing enabled and the `gcloud` CLI installed, but have never deployed to Cloud Run before.
+
+The app calls Gemini 2.5 Flash through **Vertex AI** using **Application Default Credentials**, so there are no API keys to manage in Secret Manager — authentication is handled by a service account attached to the Cloud Run service.
 
 ---
 
@@ -9,7 +11,6 @@ This guide walks you through deploying News Triangulator to **Google Cloud Run**
 - [Google Cloud SDK (gcloud CLI)](https://cloud.google.com/sdk/docs/install) installed and authenticated
 - A Google Cloud project with billing enabled
 - Docker installed locally (for building images, or use Cloud Build)
-- A Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey)
 
 ## Step 1: Authenticate and Set Your Project
 
@@ -17,41 +18,41 @@ This guide walks you through deploying News Triangulator to **Google Cloud Run**
 # Login to Google Cloud
 gcloud auth login
 
-# Set your project (replace with your project ID)
+# Set your project (replace with your project ID; must match VERTEX_PROJECT in src/lib/gemini.ts)
 gcloud config set project YOUR_PROJECT_ID
 
 # Enable required APIs
+gcloud services enable aiplatform.googleapis.com
 gcloud services enable run.googleapis.com
-gcloud services enable containerregistry.googleapis.com
-gcloud services enable secretmanager.googleapis.com
 gcloud services enable artifactregistry.googleapis.com
+gcloud services enable cloudbuild.googleapis.com
 ```
 
-## Step 2: Store API Key in Secret Manager
+> If your project ID differs from `news-triangulator`, update the `VERTEX_PROJECT` constant in [src/lib/gemini.ts](../src/lib/gemini.ts) before building the image. `VERTEX_LOCATION` should match the region you plan to deploy in (default `us-central1`).
 
-**Never hardcode API keys.** Use Google Cloud Secret Manager:
+## Step 2: Create a Runtime Service Account for Cloud Run
+
+Instead of mounting an API key, we attach a dedicated service account to the Cloud Run service and grant it Vertex AI access.
 
 ```bash
-# Create the secret
-echo -n "YOUR_GEMINI_API_KEY" | gcloud secrets create gemini-api-key \
-  --replication-policy="automatic" \
-  --data-file=-
+# Create the service account
+gcloud iam service-accounts create news-triangulator-runtime \
+  --display-name="News Triangulator Cloud Run runtime"
 
-# Grant Cloud Run access to the secret
-gcloud secrets add-iam-policy-binding gemini-api-key \
-  --member="serviceAccount:YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
+# Grab the full email (stash in a shell variable for the commands below)
+SA_EMAIL="news-triangulator-runtime@YOUR_PROJECT_ID.iam.gserviceaccount.com"
+
+# Grant it Vertex AI user access
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:${SA_EMAIL}" \
+  --role="roles/aiplatform.user"
 ```
 
-To find your project number:
-```bash
-gcloud projects describe YOUR_PROJECT_ID --format="value(projectNumber)"
-```
+`roles/aiplatform.user` is sufficient to call `generateContent` with Google Search Grounding. No Secret Manager roles are needed.
 
 ## Step 3: Create an Artifact Registry Repository
 
 ```bash
-# Create a Docker repository in Artifact Registry
 gcloud artifacts repositories create news-triangulator \
   --repository-format=docker \
   --location=us-central1 \
@@ -113,19 +114,22 @@ gcloud run deploy news-triangulator \
   --cpu=1 \
   --min-instances=0 \
   --max-instances=3 \
-  --set-secrets="GEMINI_API_KEY=gemini-api-key:latest" \
+  --service-account="${SA_EMAIL}" \
   --set-env-vars="NODE_ENV=production,NEXT_PUBLIC_APP_URL=https://YOUR_SERVICE_URL"
 ```
 
 **Flag explanations**:
+
 | Flag | Purpose |
 |------|---------|
 | `--allow-unauthenticated` | Makes the service publicly accessible |
 | `--port=8080` | Cloud Run default port; matches Dockerfile EXPOSE |
 | `--memory=512Mi` | Sufficient for Next.js SSR + Gemini API calls |
 | `--min-instances=0` | Scale to zero when not in use (saves cost) |
-| `--max-instances=3` | Prevents runaway scaling (and API key abuse) |
-| `--set-secrets` | Mounts Secret Manager secrets as env variables |
+| `--max-instances=3` | Prevents runaway scaling (and quota abuse) |
+| `--service-account` | Runtime identity used for Vertex AI auth (set up in Step 2) |
+
+> Deliberately absent: `--set-secrets`. There is no API key to mount — Vertex AI credentials flow from the attached service account.
 
 ## Step 7: Update the App URL
 
@@ -149,7 +153,7 @@ gcloud run services update news-triangulator \
 # Check the service status
 gcloud run services describe news-triangulator --region=us-central1
 
-# Hit the health check
+# Hit the home page
 curl https://news-triangulator-xxxxx-uc.a.run.app
 
 # Test the API endpoint
@@ -178,7 +182,8 @@ gcloud run deploy news-triangulator \
 | Issue | Solution |
 |-------|----------|
 | "Container failed to start" | Check logs: `gcloud run services logs read news-triangulator --region=us-central1` |
-| "Secret not found" | Verify the secret exists: `gcloud secrets list` |
-| "Permission denied on secret" | Re-run the IAM binding command from Step 2 |
+| `PERMISSION_DENIED` calling Vertex AI | Confirm the runtime SA has `roles/aiplatform.user` on the project and that `aiplatform.googleapis.com` is enabled |
+| `Could not load the default credentials` in logs | The service was deployed without `--service-account`. Redeploy with the flag set to `${SA_EMAIL}` |
+| 429 `GEMINI_QUOTA_EXCEEDED` in API responses | Vertex AI per-minute quota hit — raise it in the Cloud Console or lower `--max-instances` |
 | Slow cold starts | Set `--min-instances=1` (costs more but eliminates cold starts) |
 | 503 errors under load | Increase `--max-instances` and `--memory` |

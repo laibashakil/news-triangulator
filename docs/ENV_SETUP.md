@@ -1,28 +1,80 @@
-# Environment Variables Setup
+# Environment & Authentication Setup
 
-This document explains every environment variable the application needs, where to get each value, and how to configure them for both local development and Cloud Run deployment.
+News Triangulator calls Gemini 2.5 Flash through **Vertex AI**, so authentication is handled by **Google Cloud Application Default Credentials (ADC)** — not by a `GEMINI_API_KEY`. This document explains how to authenticate locally, how to authenticate on Cloud Run, and which environment variables the app actually reads.
 
 ---
 
-## Required Variables
+## Authentication
 
-### `GEMINI_API_KEY`
+The service is created in [src/lib/gemini.ts](src/lib/gemini.ts) with:
+
+```ts
+new GoogleGenAI({
+  vertexai: true,
+  project: 'news-triangulator',
+  location: 'us-central1',
+});
+```
+
+The `@google/genai` SDK resolves credentials in this order when `vertexai: true`:
+
+1. A service-account JSON file pointed to by `GOOGLE_APPLICATION_CREDENTIALS`
+2. The compute service account on Google Cloud runtimes (Cloud Run, GCE, GKE, etc.)
+3. The user credentials stored by `gcloud auth application-default login`
+
+In all three cases, the identity must have **`roles/aiplatform.user`** (or a superset) on the target project, and the **Vertex AI API** (`aiplatform.googleapis.com`) must be enabled.
+
+### Local Development
+
+```bash
+# Install the Google Cloud CLI first: https://cloud.google.com/sdk/docs/install
+
+# Set your project (use the one that matches the constant in src/lib/gemini.ts,
+# or change that constant to match your project)
+gcloud config set project news-triangulator
+
+# Enable the Vertex AI API (idempotent)
+gcloud services enable aiplatform.googleapis.com
+
+# Create ADC credentials for your user
+gcloud auth application-default login
+```
+
+After this, `pnpm dev` will pick up your credentials automatically — no env var needed.
+
+### Cloud Run
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the full walk-through. In short:
+
+- Grant the Cloud Run service's runtime service account `roles/aiplatform.user` on the project
+- Enable `aiplatform.googleapis.com`
+- Do **not** set `GOOGLE_APPLICATION_CREDENTIALS` — Cloud Run attaches the service-account credentials automatically
+
+### Project ID & Location
+
+Both are hardcoded in [src/lib/gemini.ts](src/lib/gemini.ts):
+
+```ts
+const VERTEX_PROJECT = 'news-triangulator';
+const VERTEX_LOCATION = 'us-central1';
+```
+
+Change these if you deploy to a different project or region. They are deliberately code-level rather than env-var-configurable to keep the demo simple.
+
+---
+
+## Environment Variables
+
+### `GEMINI_STORY_VALIDATION`
 
 | Property | Value |
 |----------|-------|
-| **Required** | Yes |
-| **Where to get it** | [Google AI Studio → Get API Key](https://aistudio.google.com/apikey) |
-| **Used by** | Server-side only (`src/lib/gemini.ts`) |
-| **Never exposed to** | Client-side / browser |
+| **Required** | No |
+| **Default** | unset (validation skipped) |
+| **Values** | `true` to enable |
+| **Used by** | Server-side only ([src/lib/gemini.ts](src/lib/gemini.ts)) |
 
-This is the API key for the Gemini API. It authenticates your requests to Google's generative AI models. The free tier includes a generous quota for development and demo purposes.
-
-**Steps to obtain**:
-1. Go to [Google AI Studio](https://aistudio.google.com/)
-2. Click "Get API Key" in the top navigation
-3. Click "Create API Key"
-4. Select your Google Cloud project (or create one)
-5. Copy the generated key
+When set to `true`, the triangulation flow runs an extra pre-flight Gemini call to verify the input is a plausible news story before spending the grounded search call. Defaults off to keep quota use minimal.
 
 ### `NEXT_PUBLIC_APP_URL`
 
@@ -33,7 +85,7 @@ This is the API key for the Gemini API. It authenticates your requests to Google
 | **Production value** | Your Cloud Run service URL |
 | **Used by** | Client-side (for API calls and meta tags) |
 
-The base URL of the deployed application. The `NEXT_PUBLIC_` prefix makes this available in browser-side code.
+The base URL of the deployed application. The `NEXT_PUBLIC_` prefix makes this available in browser-side code. Never put secrets in a `NEXT_PUBLIC_` variable.
 
 ### `NODE_ENV`
 
@@ -42,67 +94,35 @@ The base URL of the deployed application. The `NEXT_PUBLIC_` prefix makes this a
 | **Required** | No (Next.js sets this automatically) |
 | **Local value** | `development` (set by `next dev`) |
 | **Production value** | `production` (set in Dockerfile) |
-| **Used by** | Next.js internals, conditional logic |
 
-## Local Development Setup
+### `GOOGLE_APPLICATION_CREDENTIALS` (optional)
 
-### 1. Create `.env.local` file
+Only set this if you want to authenticate via a service-account JSON file instead of `gcloud auth application-default login`. Point it to the absolute path of the key file. Not required on Cloud Run.
 
-```bash
-# Copy the example file
-cp .env.example .env.local
-```
+---
 
-### 2. Fill in the values
+## Local `.env.local` Template
 
 ```env
 # .env.local — DO NOT COMMIT THIS FILE
 
-# Required: Your Gemini API key from Google AI Studio
-GEMINI_API_KEY=your_api_key_here
-
-# Optional: App URL (defaults to localhost:3000 in dev)
+# Optional: app URL (defaults to http://localhost:3000 in dev)
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 
-# Optional: Set by Next.js automatically
-NODE_ENV=development
+# Optional: enable the pre-flight validation call (off by default)
+# GEMINI_STORY_VALIDATION=true
+
+# Optional: point at a service-account JSON instead of using gcloud ADC
+# GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
 ```
 
-### 3. Verify
+There is **no `GEMINI_API_KEY`** to set. If you copied this project from an earlier commit that referenced one, delete it — the Vertex AI path ignores it.
 
-```bash
-pnpm dev
-# The app should start without "missing API key" errors
-```
-
-## Cloud Run Configuration
-
-In Cloud Run, environment variables are set via the deployment command or the Cloud Console.
-
-### Using Secret Manager (recommended for API keys)
-
-```bash
-# Store the key as a secret
-echo -n "your_api_key" | gcloud secrets create gemini-api-key \
-  --replication-policy="automatic" \
-  --data-file=-
-
-# Reference in deployment
-gcloud run deploy news-triangulator \
-  --set-secrets="GEMINI_API_KEY=gemini-api-key:latest" \
-  --set-env-vars="NODE_ENV=production,NEXT_PUBLIC_APP_URL=https://your-service.run.app"
-```
-
-### Using Plain Environment Variables (not recommended for secrets)
-
-```bash
-gcloud run deploy news-triangulator \
-  --set-env-vars="GEMINI_API_KEY=your_key,NODE_ENV=production"
-```
+---
 
 ## Security Notes
 
-- **Never** commit `.env.local` or any file containing real API keys
-- The `.gitignore` file excludes `.env*` files (except `.env.example`)
-- In production, always use Secret Manager for `GEMINI_API_KEY`
-- `NEXT_PUBLIC_` prefixed variables are exposed to the browser — never put secrets in them
+- `.gitignore` already excludes `.env*` files except `.env.example`
+- Never commit service-account JSON files; keep them out of the repo
+- On Cloud Run, prefer the attached service account over mounting a key file — it rotates automatically and is never written to disk
+- `NEXT_PUBLIC_`-prefixed variables are exposed to the browser by Next.js at build time; never put credentials in them
