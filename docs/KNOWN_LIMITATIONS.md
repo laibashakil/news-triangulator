@@ -4,16 +4,17 @@ An honest assessment of what News Triangulator does well, what it doesn't, and w
 
 ---
 
-## Search Grounding Source Coverage
+## Curated Outlet Lists
 
-**The limitation**: When Gemini searches with Google Search Grounding, we cannot control which specific outlets it finds. We provide prompt guidance ("focus on progressive-leaning sources like...") but Gemini generates its own search queries and processes whatever results Google returns.
+**The limitation**: Each lens is searched against a **fixed, curated list of outlets** (`PERSPECTIVE_DOMAINS` in [src/lib/search.ts](../src/lib/search.ts)) via Tavily's `include_domains`. The triangulation is only as representative as those lists.
 
 **What this means in practice**:
-- Sometimes a "progressive" search returns a mainstream outlet instead of an explicitly progressive one
-- Sometimes the same outlet appears in multiple perspectives (e.g., BBC appears in both conservative and international columns)
-- Coverage gaps exist — if a story wasn't covered by outlets matching a particular orientation, that perspective's column will be thin
+- An outlet not in the list never appears, even if it covered the story well
+- The lists encode our judgment of where each outlet leans — a debatable call for some outlets
+- Coverage gaps exist — if a story wasn't covered by the outlets on a lens's list (or isn't in Tavily's index), that perspective's column will be thin
+- Results are also bounded by Tavily's crawl coverage and the 30-day recency window (both configurable in `search.ts`)
 
-**Why we accept this**: Forcing specific outlets would require us to scrape those sites directly, which is legally fraught and technically fragile. The Search Grounding approach is honest — it shows you what Google actually found, not what we curated.
+**Why we accept this**: Domain-targeted search is what makes the perspectives genuinely *different* — it guarantees the progressive column shows progressive outlets, etc., rather than one undifferentiated search. The lists are easy to edit in one place, and being explicit about them is more honest than hiding the selection behind a model's opaque query generation.
 
 ## Ideological Categorization Is Approximate
 
@@ -35,49 +36,49 @@ An honest assessment of what News Triangulator does well, what it doesn't, and w
 
 **What production would require**: Redis or Cloud Memorystore for distributed rate limiting. For a hackathon demo, in-memory is fine — you have one instance and you just need to prevent accidental API key hammering during a live presentation.
 
-## Free-Tier Daily Request Quota
+## Free-Tier Limits
 
-**The limitation**: The app runs on the **free Gemini Developer API**, which enforces a per-day request cap that varies by model. Each triangulation makes **2 requests** (one grounded search + one combined analysis), so the number of analyses per day is bounded by `daily_quota / 2`.
+**The limitation**: The app runs on the **free tiers of Tavily and Groq**. Each triangulation makes **3 Tavily searches + 1 Groq call**.
 
 **What this means in practice**:
-- Under real traffic the app can hit the daily limit and return a `429` / "try again" message until the quota resets (~24h)
-- The default model is `gemini-2.5-flash-lite` specifically because it has a more generous free daily allowance than the full flash model while still supporting grounding
-- The free tier also occasionally returns transient `503` "high demand" errors
+- Tavily's free tier is ~1,000 searches/month → roughly **330 analyses/month** before the search budget is used up
+- Groq's free tier has per-minute/day rate limits; bursts of traffic can hit a transient `429`
+- Both providers can occasionally return transient `5xx` under load
 
-**Mitigation**: All model calls retry transient `503`/`500`/`429` errors with exponential backoff. Persistent quota exhaustion is surfaced as a clear user-facing message rather than a crash. For higher limits you'd switch `MODEL_ID`, move to a paid tier, or add caching.
+**Mitigation**: The Groq client retries transient `429`/`5xx` with exponential backoff; rate-limit and upstream failures surface as clear user-facing messages rather than crashes. For more headroom you'd upgrade a provider tier, swap `GROQ_MODEL`, or add caching.
 
 ## No Offline / Cached Results
 
-**The limitation**: Every triangulation request makes 2 live Gemini Developer API calls — one grounded Google Search call and one combined analysis call (a third runs when `GEMINI_STORY_VALIDATION=true`). There is no caching layer.
+**The limitation**: Every request makes live Tavily + Groq calls. There is no caching layer.
 
 **What this means**:
-- The same query entered twice will produce different results (because Gemini may find different sources each time)
+- The same query entered twice may produce slightly different results (fresh search results, non-zero LLM temperature)
 - Results cannot be retrieved after the browser tab is closed
-- Each analysis consumes free-tier request quota (see above)
+- Each analysis consumes free-tier search/LLM budget (see above)
 
-**Why we accept this**: Caching news analysis would create a stale-data problem. News coverage changes hour by hour — yesterday's spin layer may not match today's. For a production version, you'd want a TTL-based cache (maybe 1 hour), but for a demo the live-search aspect is actually a feature, not a bug.
+**Why we accept this**: Caching news analysis would create a stale-data problem. News coverage changes hour by hour — yesterday's spin layer may not match today's. For production you'd want a short TTL cache (maybe 1 hour), but the live-search aspect is a feature, not a bug.
 
-## Gemini's Own Biases
+## The LLM's Own Biases
 
-**The limitation**: Gemini, like all large language models, has its own biases baked into its training data. Its judgment of what constitutes "progressive spin" vs. "conservative spin" is influenced by these biases.
+**The limitation**: The synthesis model (Llama via Groq), like all LLMs, has biases baked into its training data. Its judgment of what constitutes "progressive spin" vs. "conservative spin" is influenced by these biases.
 
-**What this means**: The model's categorization of framing and spin reflects its training, not an objective ground truth. Two humans analyzing the same coverage might categorize spin differently.
+**What this means**: The model's categorization of framing and spin reflects its training, not objective ground truth. Two humans analyzing the same coverage might categorize spin differently.
 
-**Mitigation**: The three-way triangulation itself is the mitigation. By forcing the model to analyze from three different starting points and then synthesize, we reduce the impact of any single bias direction. The consensus layer — facts that survive triangulation — is the most trustworthy output.
+**Mitigation**: The three-way triangulation is the mitigation — and because the *coverage* for each lens is gathered by domain-targeted search (not the model), the model is summarizing real, separated source material rather than inventing it. The consensus layer — facts that survive triangulation — is the most trustworthy output.
 
-## JSON Parsing Fragility
+## JSON Parsing
 
-**The limitation**: The grounded search call cannot use a response schema (constrained decoding is incompatible with the `googleSearch` tool), so its output is free-form text.
+**The limitation**: The synthesis depends on the model returning well-formed JSON matching the expected shape.
 
-**Mitigation**: The grounded call's output is deliberately treated as unstructured research and never parsed as JSON. The structuring/synthesis call **does** pass a `responseSchema`, so Gemini returns valid JSON by construction. The `GeminiService` parser adds defensive fallbacks (strip markdown fences, isolate the outer object, drop trailing commas) as a backstop. Together these make malformed JSON reaching the UI effectively a non-issue; any residual failure surfaces as a "try again" message.
+**Mitigation**: Groq's JSON mode (`response_format: { type: 'json_object' }`) guarantees syntactically valid JSON. The parser in `triangulator.ts` adds defensive fallbacks (strip markdown fences, isolate the outer object, drop trailing commas), and the service coerces any missing/empty fields to sensible defaults. A malformed or thin response degrades gracefully instead of failing.
 
 ## Single-Language Support
 
-**The limitation**: All prompts are in English. The system works best when the query and the searched sources are in English.
+**The limitation**: All prompts and outlet lists are English / US-Western oriented. The system works best when the query and sources are in English.
 
 **What this means**: Non-English stories may produce worse results because:
-- Gemini's English search queries may not find the best non-English coverage
-- Summaries of non-English articles may lose nuance in translation
+- The curated outlet lists are predominantly English-language
+- Summaries of non-English articles may lose nuance
 - The "tone" classification is calibrated for English-language editorial conventions
 
 ## No User Accounts or History

@@ -12,7 +12,7 @@
 /** The three ideological categories used for triangulation */
 export type PerspectiveLabel = 'progressive' | 'conservative' | 'international';
 
-/** A news source found via Google Search Grounding */
+/** A news source returned by the live search */
 export interface Source {
   /** Display name of the outlet (e.g., "The Guardian") */
   name: string;
@@ -24,7 +24,7 @@ export interface Source {
 export interface Perspective {
   /** Which ideological orientation this perspective represents */
   label: PerspectiveLabel;
-  /** Real sources found and cited by Gemini during search */
+  /** Real sources found by the live search for this lens */
   sources: Source[];
   /** 2-3 paragraph summary of how these sources covered the story */
   summary: string;
@@ -46,8 +46,8 @@ export interface TriangulationResult {
   /** The three perspective analyses */
   perspectives: [Perspective, Perspective, Perspective];
   /**
-   * Outlets and URLs from Search Grounding when one combined search
-   * produced all perspectives (otherwise omitted).
+   * De-duplicated list of every outlet/URL the live search consulted across
+   * all three lenses (omitted if none were found).
    */
   consultedSources?: Source[];
   /** Facts that all three perspectives agree on (4-8 items) */
@@ -90,7 +90,7 @@ export interface TriangulateErrorResponse {
   code:
     | 'INVALID_INPUT'
     | 'RATE_LIMITED'
-    | 'GEMINI_QUOTA_EXCEEDED'
+    | 'QUOTA_EXCEEDED'
     | 'SERVICE_ERROR'
     | 'VALIDATION_FAILED';
 }
@@ -119,7 +119,7 @@ export const STATE_LABELS: Record<TriangulationState, string> = {
 };
 
 /* ──────────────────────────────────────────────────────────────────────
- * Gemini Response Parsing Types (internal to gemini.ts)
+ * LLM Response Parsing Types (internal to triangulator.ts)
  * ────────────────────────────────────────────────────────────────────── */
 
 /** Raw JSON shape returned by the perspective prompt */
@@ -149,26 +149,29 @@ export interface SynthesisRawResponse {
 }
 
 /**
- * Raw JSON from the single post-search analysis call, which produces the three
- * structured lenses AND the synthesis in one schema-constrained response.
+ * Raw JSON from the single synthesis call, which produces the three structured
+ * lenses AND the cross-lens synthesis in one JSON response.
  */
 export type FullAnalysisRawResponse = AllPerspectivesRawResponse &
-  SynthesisRawResponse;
+  SynthesisRawResponse & {
+    /** False when the search results don't actually relate to the query. */
+    relevant?: boolean;
+  };
 
 /* ──────────────────────────────────────────────────────────────────────
  * Custom Error
  * ────────────────────────────────────────────────────────────────────── */
 
-/** Custom error class for Gemini service failures */
-export class GeminiServiceError extends Error {
+/** Custom error class for triangulation pipeline failures */
+export class TriangulationError extends Error {
   /** The original error that caused this failure */
   public readonly cause: unknown;
   /** Which phase of the pipeline failed */
-  public readonly phase: 'validation' | 'perspective' | 'synthesis' | 'parsing' | 'config';
+  public readonly phase: 'search' | 'synthesis' | 'parsing' | 'config';
 
-  constructor(message: string, phase: GeminiServiceError['phase'], cause?: unknown) {
+  constructor(message: string, phase: TriangulationError['phase'], cause?: unknown) {
     super(message);
-    this.name = 'GeminiServiceError';
+    this.name = 'TriangulationError';
     this.phase = phase;
     this.cause = cause;
   }

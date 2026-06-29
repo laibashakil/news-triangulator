@@ -1,8 +1,8 @@
 /**
  * Main page — News Triangulator home.
  *
- * Full-width hero section with app branding, input form,
- * multi-stage loading indicator, and results panel.
+ * Editorial hero with a quiet triangulation wordmark, the input form,
+ * multi-stage loading indicator, error state, and results panel.
  */
 
 'use client';
@@ -19,35 +19,54 @@ export default function HomePage() {
     state === 'validating' ||
     state === 'fetching-perspectives' ||
     state === 'synthesizing';
+  // When there's nothing below the hero, let it fill and center the viewport
+  // instead of clinging to the top with a large void beneath.
+  const heroOnly = state === 'idle';
 
   return (
     <main className="min-h-screen flex flex-col">
       {/* ───── Hero Section ───── */}
-      <section className="relative px-4 pt-16 pb-8 md:pt-24 md:pb-8">
-        {/* Subtle gradient background */}
-        <div className="absolute inset-0 bg-gradient-to-b from-navy via-navy to-navy-light pointer-events-none" />
-
-        {/* Decorative glow orbs */}
-        <div className="absolute top-20 left-1/4 w-64 h-64 bg-perspective-progressive/5 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute top-32 right-1/4 w-48 h-48 bg-perspective-conservative/5 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute top-40 left-1/2 w-56 h-56 bg-perspective-international/5 rounded-full blur-3xl pointer-events-none" />
-
+      <section
+        className={`relative px-4 ${
+          heroOnly
+            ? 'flex-1 flex flex-col justify-center py-12'
+            : 'pt-16 pb-8 md:pt-24 md:pb-10'
+        }`}
+      >
         <div className="relative z-10 max-w-4xl mx-auto text-center">
-          {/* App title */}
-          <div className="mb-3 flex items-center justify-center gap-2">
-            <span className="text-2xl" aria-hidden="true">🔺</span>
-            <h1 className="text-4xl md:text-5xl font-bold tracking-tight">
-              <span className="bg-clip-text text-transparent bg-gradient-to-r from-perspective-progressive via-white to-perspective-conservative">
-                News Triangulator
-              </span>
+          {/* Wordmark */}
+          <div className="mb-4 flex items-center justify-center gap-3">
+            {/* Triangulation mark — three perspectives converging */}
+            <svg
+              width="28"
+              height="28"
+              viewBox="0 0 28 28"
+              fill="none"
+              aria-hidden="true"
+              className="flex-shrink-0"
+            >
+              <path
+                d="M14 4 L24 22 L4 22 Z"
+                stroke="currentColor"
+                strokeWidth="1.25"
+                strokeLinejoin="round"
+                className="text-ink-700"
+              />
+              <circle cx="14" cy="4" r="2.6" className="fill-perspective-progressive" />
+              <circle cx="4" cy="22" r="2.6" className="fill-perspective-conservative" />
+              <circle cx="24" cy="22" r="2.6" className="fill-perspective-international" />
+              <circle cx="14" cy="16" r="2" className="fill-core" />
+            </svg>
+            <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-ink-100">
+              News Triangulator
             </h1>
           </div>
 
           {/* Tagline */}
-          <p className="text-offwhite/60 text-base md:text-lg max-w-xl mx-auto mb-10 leading-relaxed">
+          <p className="text-ink-300 text-base md:text-lg max-w-xl mx-auto mb-10 leading-relaxed">
             Paste any news story. See how progressive, conservative, and
-            international sources covered it. Read what every version actually
-            agrees on.
+            international sources covered it — and read the factual core they
+            all agree on.
           </p>
 
           {/* Input form */}
@@ -65,11 +84,14 @@ export default function HomePage() {
       {/* ───── Error State ───── */}
       {state === 'error' && error && (
         <section className="px-4 py-8">
-          <div className="max-w-2xl mx-auto text-center animate-fade-in">
-            <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-6">
+          <div
+            className="max-w-2xl mx-auto text-center animate-fade-in"
+            role="alert"
+          >
+            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-6">
               <div className="flex items-center justify-center gap-2 mb-3">
                 <svg
-                  className="w-5 h-5 text-red-400"
+                  className="w-5 h-5 text-red-300"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -82,14 +104,14 @@ export default function HomePage() {
                     d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                   />
                 </svg>
-                <h2 className="text-lg font-semibold text-red-400">
-                  Analysis Failed
+                <h2 className="text-lg font-semibold text-red-300">
+                  Analysis failed
                 </h2>
               </div>
-              <p className="text-sm text-red-300/80 mb-4">{error}</p>
+              <p className="text-sm text-red-200/90 mb-4">{error}</p>
               <button
                 onClick={reset}
-                className="text-sm text-offwhite/60 hover:text-offwhite underline underline-offset-2 transition-colors"
+                className="text-sm text-ink-300 hover:text-ink-100 underline underline-offset-4 rounded transition-colors"
               >
                 Try again
               </button>
@@ -104,10 +126,10 @@ export default function HomePage() {
           <ResultsPanel result={result} />
 
           {/* New analysis button */}
-          <div className="text-center mt-6 pb-6">
+          <div className="text-center mt-8 pb-6">
             <button
               onClick={reset}
-              className="text-sm text-offwhite/40 hover:text-offwhite/70 transition-colors underline underline-offset-4"
+              className="text-sm text-ink-500 hover:text-ink-100 transition-colors underline underline-offset-4 rounded"
             >
               Analyze another story
             </button>
@@ -116,9 +138,9 @@ export default function HomePage() {
       )}
 
       {/* ───── Footer ───── */}
-      <footer className="mt-auto px-4 py-3 text-center">
-        <p className="text-xs text-offwhite/20">
-          Powered by Vertex AI (Gemini 2.5 Flash) with Google Search Grounding
+      <footer className="mt-auto px-4 py-4 text-center">
+        <p className="text-xs text-ink-500">
+          Powered by Tavily (live search) + Groq (Llama 3.3)
         </p>
       </footer>
     </main>

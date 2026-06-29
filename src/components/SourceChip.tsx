@@ -1,7 +1,7 @@
 /**
  * SourceChip — Clickable pill displaying a news outlet name.
  *
- * Shows the actual outlet names that Gemini found via Search Grounding.
+ * Shows the actual outlet names returned by the live news search.
  * Each chip links to the source URL, providing credibility through
  * transparency — users can verify these are real sources.
  */
@@ -12,17 +12,19 @@ import type { Source, PerspectiveLabel } from '@/lib/types';
 interface SourceChipProps {
   /** The source to display */
   source: Source;
-  /** Perspective color variant */
-  variant: PerspectiveLabel;
+  /** Color variant — a perspective accent, or neutral for combined sources */
+  variant: PerspectiveLabel | 'neutral';
 }
 
 const VARIANT_STYLES = {
   progressive:
-    'hover:bg-perspective-progressive/20 hover:border-perspective-progressive/40',
+    'hover:bg-perspective-progressive/15 hover:border-perspective-progressive/40 focus-visible:ring-perspective-progressive/70',
   conservative:
-    'hover:bg-perspective-conservative/20 hover:border-perspective-conservative/40',
+    'hover:bg-perspective-conservative/15 hover:border-perspective-conservative/40 focus-visible:ring-perspective-conservative/70',
   international:
-    'hover:bg-perspective-international/20 hover:border-perspective-international/40',
+    'hover:bg-perspective-international/15 hover:border-perspective-international/40 focus-visible:ring-perspective-international/70',
+  neutral:
+    'hover:bg-surface-hover hover:border-white/25 focus-visible:ring-core/60',
 } as const;
 
 export function SourceChip({ source, variant }: SourceChipProps) {
@@ -34,17 +36,18 @@ export function SourceChip({ source, variant }: SourceChipProps) {
       title={`Read on ${source.name}`}
       className={`
         inline-flex items-center gap-1.5 px-3 py-1
-        text-xs font-medium text-offwhite/70
+        text-xs font-medium text-ink-300
         bg-white/5 border border-white/10 rounded-full
-        transition-all duration-200
-        hover:text-offwhite
+        transition-colors duration-200
+        hover:text-ink-100
+        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-navy
         ${VARIANT_STYLES[variant]}
       `}
     >
       <span className="truncate max-w-[150px]">{source.name}</span>
       {/* External link icon */}
       <svg
-        className="w-3 h-3 flex-shrink-0 opacity-50"
+        className="w-3 h-3 flex-shrink-0 opacity-60"
         fill="none"
         stroke="currentColor"
         viewBox="0 0 24 24"

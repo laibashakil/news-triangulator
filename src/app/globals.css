@@ -5,7 +5,8 @@
 /*
  * Global styles for News Triangulator.
  *
- * Base layer: scrollbar styling, selection colors, smooth scrolling.
+ * Base layer: scrollbar styling, selection colors, focus visibility,
+ * reduced-motion handling.
  * Component layer: reusable utility classes.
  */
 
@@ -21,7 +22,7 @@
   }
 
   ::-webkit-scrollbar-track {
-    background: #101726;
+    background: #0c1118;
   }
 
   ::-webkit-scrollbar-thumb {
@@ -33,15 +34,21 @@
     background: rgba(255, 255, 255, 0.2);
   }
 
-  /* Text selection color matching the brand */
+  /* Text selection — neutral "paper" highlight, not a perspective color */
   ::selection {
-    background: rgba(245, 158, 11, 0.3);
-    color: #E8E6E3;
+    background: rgba(245, 239, 227, 0.22);
+    color: #eceae6;
   }
 
-  /* Remove default focus outline, we handle it in components */
-  *:focus {
-    outline: none;
+  /*
+   * Accessible focus: no visible ring for mouse users, a clear ring for
+   * keyboard users. Components may override the color, but every
+   * interactive element inherits a visible focus state by default.
+   */
+  :focus-visible {
+    outline: 2px solid #f5efe3;
+    outline-offset: 2px;
+    border-radius: 2px;
   }
 
   /* Base body styling backup (if Tailwind classes don't load) */
@@ -49,16 +56,23 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+
+  /* Respect users who prefer reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
 @layer components {
-  /* Glass card utility */
-  .glass-card {
-    @apply bg-surface rounded-xl border border-surface-border backdrop-blur-sm;
-  }
-
-  /* Section heading style */
+  /* Section eyebrow / label style */
   .section-heading {
-    @apply text-xs font-semibold text-offwhite/50 uppercase tracking-wider;
+    @apply text-xs font-semibold text-ink-500 uppercase tracking-wider;
   }
 }

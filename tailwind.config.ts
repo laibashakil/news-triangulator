@@ -3,10 +3,14 @@ import type { Config } from 'tailwindcss';
 /**
  * Tailwind configuration with News Triangulator design tokens.
  *
- * Color philosophy:
- * - Three perspective accents (amber, blue, teal) are categorical, not political
- * - Dark navy background creates a serious, editorial feel
- * - Off-white text provides comfortable contrast on dark backgrounds
+ * Design philosophy — "color belongs to the perspectives, the product's
+ * voice is paper":
+ * - Three perspective accents (amber, blue, teal) are categorical, not
+ *   political, and tuned to equal luminance + AA contrast on dark navy.
+ * - The factual `core` is the only warm light on the page — everything
+ *   converges toward it, enacting triangulation.
+ * - A defined `ink` text scale replaces ad-hoc opacity values; every step
+ *   used for essential text meets WCAG AA (≥4.5:1) on the navy background.
  */
 const config: Config = {
   content: [
@@ -19,29 +23,49 @@ const config: Config = {
       colors: {
         /* ──── Base palette ──── */
         navy: {
-          DEFAULT: '#101726',
-          light: '#111827',
-          lighter: '#1F2937',
+          DEFAULT: '#0C1118',
+          light: '#111826',
+          lighter: '#1A2233',
         },
+        /* Kept for backwards compatibility; prefer the `ink` scale below. */
         offwhite: '#E8E6E3',
 
-        /* ──── Perspective accent colors ──── */
-        perspective: {
-          progressive: '#F59E0B',
-          conservative: '#3B82F6',
-          international: '#14B8A6',
+        /* ──── Neutral text scale (all AA on navy) ──── */
+        ink: {
+          100: '#ECEAE6', // primary — headings / body          ~14:1
+          300: '#B6BCC7', // secondary — summaries / paragraphs  ~7:1
+          500: '#8B93A3', // muted — eyebrows / labels           ~4.6:1
+          700: '#5B6373', // faint — decorative ONLY, never essential text
         },
 
-        /* ──── Semantic colors ──── */
+        /* ──── Perspective accent colors (equal-luminance, AA as text) ──── */
+        perspective: {
+          progressive: '#F2A93B',
+          conservative: '#6AA6FF',
+          international: '#2DD4BF',
+        },
+
+        /* ──── The factual core — warm "printed truth" ──── */
+        core: {
+          DEFAULT: '#F5EFE3',
+          dim: '#CFC8B8',
+        },
+
+        /* ──── Semantic surfaces ──── */
         surface: {
-          DEFAULT: 'rgba(255, 255, 255, 0.04)',
-          hover: 'rgba(255, 255, 255, 0.08)',
-          border: 'rgba(255, 255, 255, 0.10)',
+          DEFAULT: 'rgba(255, 255, 255, 0.03)',
+          raised: '#141C2B',
+          hover: 'rgba(255, 255, 255, 0.06)',
+          border: 'rgba(255, 255, 255, 0.08)',
         },
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        display: ['Inter', 'system-ui', 'sans-serif'],
+        sans: ['var(--font-inter)', 'Inter', 'system-ui', 'sans-serif'],
+        display: ['var(--font-newsreader)', 'Georgia', 'Cambria', 'serif'],
+        mono: ['var(--font-plex-mono)', 'ui-monospace', 'monospace'],
+      },
+      maxWidth: {
+        measure: '38rem', // ~66ch reading measure for the factual core
       },
       animation: {
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',

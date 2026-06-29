@@ -44,23 +44,24 @@ export function Button({
     relative inline-flex items-center justify-center
     px-6 py-3 rounded-lg font-medium text-sm
     transition-all duration-200 ease-out
-    focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-navy
-    disabled:opacity-50 disabled:cursor-not-allowed
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-navy
+    disabled:cursor-not-allowed disabled:shadow-none
   `;
 
   const variantStyles = {
     primary: `
-      bg-gradient-to-r from-perspective-progressive to-amber-400
-      text-navy font-semibold
-      hover:shadow-lg hover:shadow-perspective-progressive/25
-      focus:ring-perspective-progressive
+      bg-core text-navy font-semibold
+      hover:bg-white hover:shadow-lg hover:shadow-core/20
+      focus-visible:ring-core
       hover:scale-[1.02] active:scale-[0.98]
+      disabled:bg-white/[0.07] disabled:text-ink-500 disabled:border disabled:border-surface-border disabled:hover:scale-100
     `,
     secondary: `
       bg-surface border border-surface-border
-      text-offwhite
+      text-ink-100
       hover:bg-surface-hover hover:border-white/20
-      focus:ring-white/30
+      focus-visible:ring-core/60
+      disabled:opacity-50
     `,
   };
 

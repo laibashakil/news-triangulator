@@ -88,7 +88,7 @@ export function LoadingSpinner({ state, className = '' }: LoadingSpinnerProps) {
 
       {/* Stage label */}
       <div className="text-center">
-        <p className="text-offwhite/80 text-sm font-medium tracking-wide">
+        <p className="text-ink-300 text-sm font-medium tracking-wide">
           {message}
         </p>
         <div className="mt-3 flex gap-1.5 justify-center">
@@ -97,9 +97,9 @@ export function LoadingSpinner({ state, className = '' }: LoadingSpinnerProps) {
               key={i}
               className={`h-1 rounded-full transition-all duration-500 ${
                 state === 'fetching-perspectives' && i === stageIndex
-                  ? 'w-8 bg-perspective-progressive'
+                  ? 'w-8 bg-core'
                   : state === 'synthesizing'
-                  ? 'w-8 bg-white/40'
+                  ? 'w-8 bg-core/50'
                   : 'w-2 bg-white/20'
               }`}
             />

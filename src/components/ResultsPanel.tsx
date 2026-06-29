@@ -1,14 +1,14 @@
 /**
  * ResultsPanel — Orchestrates the full results display.
  *
- * Renders the three perspective columns in a responsive grid
- * and the consensus layer below. Handles skeleton loading states
- * when data hasn't arrived yet.
+ * Leads with the factual core (the destination of the analysis), then shows
+ * how each perspective framed the story as supporting evidence, and closes
+ * with provenance: the sources consulted and the analysis timestamp.
  */
 
 import React from 'react';
 import type { TriangulationResult } from '@/lib/types';
-import { PerspectiveColumn } from './PerspectiveColumn';
+import { PerspectiveComparison } from './PerspectiveComparison';
 import { ConsensusLayer } from './ConsensusLayer';
 import { SourceChip } from './SourceChip';
 
@@ -21,60 +21,57 @@ export function ResultsPanel({ result }: ResultsPanelProps) {
   const {
     perspectives,
     consensusFacts,
+    spinIndicators,
     strippedTruth,
     storyQuery,
     consultedSources,
   } = result;
 
   return (
-    <div className="w-full max-w-7xl mx-auto space-y-8 animate-fade-in">
+    <div className="w-full max-w-7xl mx-auto space-y-12 animate-fade-in">
       {/* Story query echo */}
       <div className="text-center">
-        <p className="text-xs text-offwhite/40 uppercase tracking-wider mb-1">
+        <p className="text-xs text-ink-500 uppercase tracking-[0.2em] mb-2">
           Analysis of
         </p>
-        <p className="text-sm text-offwhite/60 max-w-2xl mx-auto italic">
+        <p className="font-display text-lg md:text-xl text-ink-100 max-w-2xl mx-auto italic leading-snug">
           &ldquo;{storyQuery}&rdquo;
         </p>
       </div>
 
-      {consultedSources && consultedSources.length > 0 && (
-        <div className="max-w-3xl mx-auto text-center">
-          <p className="text-xs text-offwhite/40 uppercase tracking-wider mb-2">
-            Sources from search
-          </p>
-          <div className="flex flex-wrap justify-center gap-2">
-            {consultedSources.slice(0, 12).map((source, index) => (
-              <SourceChip
-                key={`consulted-${index}`}
-                source={source}
-                variant="international"
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Three-column perspective grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6" id="perspectives-grid">
-        {perspectives.map((perspective) => (
-          <PerspectiveColumn
-            key={perspective.label}
-            perspective={perspective}
-          />
-        ))}
-      </div>
-
-      {/* Consensus layer — the payoff */}
+      {/* The factual core — the payoff, shown first */}
       <ConsensusLayer
         consensusFacts={consensusFacts}
         strippedTruth={strippedTruth}
       />
 
-      {/* Timestamp */}
-      <div className="text-center pb-8">
-        <p className="text-xs text-offwhite/30">
-          Analyzed at{' '}
+      {/* How each side framed it — supporting evidence */}
+      <PerspectiveComparison
+        perspectives={perspectives}
+        spinIndicators={spinIndicators}
+      />
+
+      {/* Provenance: consulted sources + timestamp */}
+      <div className="border-t border-surface-border pt-6 space-y-4">
+        {consultedSources && consultedSources.length > 0 && (
+          <div className="text-center">
+            <p className="text-xs text-ink-500 uppercase tracking-wider mb-3">
+              Sources consulted
+            </p>
+            <div className="flex flex-wrap justify-center gap-2">
+              {consultedSources.slice(0, 12).map((source, index) => (
+                <SourceChip
+                  key={`consulted-${index}`}
+                  source={source}
+                  variant="neutral"
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <p className="text-center text-xs text-ink-500 font-mono">
+          Analyzed{' '}
           {new Date(result.processedAt).toLocaleString(undefined, {
             dateStyle: 'medium',
             timeStyle: 'short',

@@ -2,23 +2,24 @@
 
 > **See the truth beneath the headlines.** Paste any news story and see how progressive, conservative, and international sources covered it differently — then read what all versions actually agree on.
 
-News Triangulator uses **Gemini 2.5 Flash-Lite** with **Google Search Grounding** (via the free **Gemini Developer API**) to perform live searches across ideologically distinct news sources, compare their coverage, and extract the factual core that survives triangulation.
+News Triangulator pairs **Tavily** (live news search) with **Groq** (fast LLM synthesis) to search ideologically distinct news outlets, compare their coverage, and extract the factual core that survives triangulation — all on free tiers, no billing required.
 
 ## Live Deployment
 
 | | |
 |---|---|
 | **Platform** | Vercel (free tier) |
-| **AI** | Gemini Developer API free tier (API-key auth) |
-| **Env var** | `GEMINI_API_KEY` — set in Vercel → Project Settings → Environment Variables |
+| **Search** | Tavily API (free tier) |
+| **AI** | Groq — `llama-3.3-70b-versatile` (free tier) |
+| **Env vars** | `TAVILY_API_KEY`, `GROQ_API_KEY` — set in Vercel → Project Settings → Environment Variables |
 
 To deploy:
 1. Push to GitHub.
 2. Import the repo at [vercel.com](https://vercel.com) (Next.js is auto-detected).
-3. Add `GEMINI_API_KEY` under **Project Settings → Environment Variables** (get a free key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)).
+3. Add `TAVILY_API_KEY` and `GROQ_API_KEY` under **Project Settings → Environment Variables** (free keys: [app.tavily.com](https://app.tavily.com) and [console.groq.com](https://console.groq.com)).
 4. Deploy. Pushes to `main` auto-redeploy.
 
-> **Free-tier note:** each analysis makes **2 Gemini calls** (one grounded search + one combined structure/synthesis). The free Developer API has a daily request cap that varies by model, so heavy traffic can hit rate limits — the app retries transient `503`/`429` errors with backoff and surfaces a clear "try again" message when the daily quota is exhausted.
+> **Free-tier note:** each analysis makes **3 Tavily searches** (one per lens) + **1 Groq call**. Tavily's free tier (~1,000 searches/month) covers roughly 330 analyses/month; Groq's free tier is generous and fast. Transient `5xx`/`429` responses are retried with backoff.
 
 ## Tech Stack
 
@@ -27,9 +28,9 @@ To deploy:
 | **Framework** | Next.js 14 (App Router) |
 | **Language** | TypeScript (strict mode) |
 | **Styling** | Tailwind CSS |
-| **AI** | Gemini 2.5 Flash-Lite via the `@google/genai` SDK (Developer API mode) |
-| **Search** | Google Search Grounding (live web search) |
-| **Auth** | `GEMINI_API_KEY` (free Gemini Developer API key) |
+| **Search** | Tavily API — domain-targeted news search per lens |
+| **AI** | Groq `llama-3.3-70b-versatile` (OpenAI-compatible, JSON mode) |
+| **Auth** | `TAVILY_API_KEY` + `GROQ_API_KEY` (both free tier) |
 | **Deployment** | Vercel |
 | **Package Manager** | pnpm |
 
@@ -38,8 +39,8 @@ To deploy:
 ### Prerequisites
 - Node.js 20+
 - pnpm (`npm install -g pnpm`)
-- A free **Gemini API key** from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (no billing required)
-- The model is set in [src/lib/gemini.ts](src/lib/gemini.ts) via `MODEL_ID` (`gemini-2.5-flash-lite`); change it there to trade quality for a higher/lower free-tier daily quota
+- A free **Tavily API key** from [app.tavily.com](https://app.tavily.com)
+- A free **Groq API key** from [console.groq.com](https://console.groq.com)
 
 ### Setup
 
@@ -51,9 +52,9 @@ cd news-triangulator
 # Install dependencies
 pnpm install
 
-# Add your Gemini API key
+# Add your API keys
 cp .env.example .env.local
-# then edit .env.local and set GEMINI_API_KEY=...
+# then edit .env.local and set TAVILY_API_KEY=... and GROQ_API_KEY=...
 
 # Start the dev server
 pnpm dev
@@ -61,26 +62,26 @@ pnpm dev
 
 Open [http://localhost:3000](http://localhost:3000) and paste a news headline.
 
-> The `@google/genai` SDK reads `GEMINI_API_KEY` from the environment. Keep your key in `.env.local` (gitignored) locally and in Vercel's environment variables in production.
+> Keep your keys in `.env.local` (gitignored) locally, and in Vercel's environment variables in production. They are read server-side only.
 
 ## How It Works
 
 1. **You paste a news story, headline, or claim**
-2. **One grounded search, three lenses** — a single Gemini call uses Google Search Grounding to gather progressive, conservative, and international coverage in one research pass
-3. **AI synthesis** — a second, schema-constrained call structures the three lenses and extracts consensus facts, spin per perspective, and a stripped-truth summary
-4. **Visual comparison** — three columns show each perspective's coverage, sources, and unique claims
+2. **Three targeted searches** — Tavily runs one news search per lens, each restricted to that lens's outlets (e.g. Guardian/MSNBC/NYT for progressive, Fox/WSJ/National Review for conservative, BBC/Reuters/Al Jazeera for international)
+3. **AI synthesis** — one Groq call (JSON mode) reads the results and produces the three structured lenses plus consensus facts, per-lens spin, and a stripped-truth summary
+4. **Visual comparison** — three columns show each perspective's coverage, real source links, and unique claims
 5. **The truth layer** — the bottom section shows what every source agrees on — the factual skeleton beneath all editorial framing
 
-> An optional third call (story validation) runs first when `GEMINI_STORY_VALIDATION=true` to reject gibberish before spending the grounded search.
+> Because each lens is searched against its own outlet list, the perspective columns reflect genuinely different slices of coverage rather than one undifferentiated search.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | [Architecture](docs/ARCHITECTURE.md) | System design, data flow, component hierarchy |
-| [Gemini Prompts](docs/GEMINI_PROMPTS.md) | Every AI prompt with reasoning |
+| [Prompts](docs/PROMPTS.md) | The synthesis prompt and reasoning |
 | [Deployment](docs/DEPLOYMENT.md) | Step-by-step Vercel deployment |
-| [Environment Setup](docs/ENV_SETUP.md) | Authentication and environment variables |
+| [Environment Setup](docs/ENV_SETUP.md) | API keys and environment variables |
 | [Known Limitations](docs/KNOWN_LIMITATIONS.md) | Honest assessment of what doesn't work perfectly |
 
 ## Project Structure

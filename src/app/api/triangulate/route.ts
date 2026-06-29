@@ -2,7 +2,7 @@
  * POST /api/triangulate
  *
  * Accepts a news story/headline/claim and returns a multi-perspective
- * triangulation analysis powered by Gemini with Search Grounding.
+ * triangulation analysis powered by Tavily (live search) + Groq (synthesis).
  *
  * - Validates input (non-empty, ≤2000 chars)
  * - Rate limits (10 requests per IP per minute, in-memory)
@@ -10,8 +10,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { GeminiService } from '@/lib/gemini';
-import { GeminiServiceError } from '@/lib/types';
+import { TriangulatorService } from '@/lib/triangulator';
+import { TriangulationError } from '@/lib/types';
 import type { TriangulateResponse, TriangulateErrorResponse } from '@/lib/types';
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -80,11 +80,11 @@ function errorResponse(
 }
 
 /**
- * Reads HTTP-style status from Gemini errors wrapped in
- * GeminiServiceError (supports @google/genai ApiError.status and
- * legacy code-based shapes).
+ * Reads an HTTP-style status from an upstream error (SearchError / GroqError
+ * carry a `.status`; the TriangulationError wraps them as `.cause`). Falls back
+ * to sniffing the message text.
  */
-function geminiCauseHttpStatus(cause: unknown): number | undefined {
+function upstreamHttpStatus(cause: unknown): number | undefined {
   let cur: unknown = cause;
   const seen = new Set<unknown>();
   for (let i = 0; i < 6 && cur != null && !seen.has(cur); i++) {
@@ -95,24 +95,15 @@ function geminiCauseHttpStatus(cause: unknown): number | undefined {
       if (typeof status === 'number' && status >= 400) return status;
       const code = o.code;
       if (typeof code === 'number' && code >= 400) return code;
-      // @google/genai often nests the real status as { error: { code } }
-      const nested = o.error as Record<string, unknown> | undefined;
-      if (nested && typeof nested.code === 'number' && nested.code >= 400) {
-        return nested.code;
-      }
     }
     cur =
       typeof cur === 'object' && cur !== null && 'cause' in cur
         ? (cur as { cause: unknown }).cause
         : undefined;
   }
-  // Last resort: the SDK frequently throws an Error whose message is the raw
-  // JSON body — sniff the common transient/quota statuses out of the text.
   const msg = cause instanceof Error ? cause.message : String(cause ?? '');
-  if (/\b503\b|UNAVAILABLE|high demand/i.test(msg)) return 503;
-  if (/\b429\b|RESOURCE_EXHAUSTED/i.test(msg)) return 429;
-  if (/\b500\b|INTERNAL/i.test(msg)) return 500;
-  return undefined;
+  const m = msg.match(/\b(429|500|502|503)\b/);
+  return m ? Number(m[1]) : undefined;
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -182,7 +173,7 @@ export async function POST(
       `[triangulate] Processing request from ${clientIp} (${query.length} chars)`
     );
 
-    const service = new GeminiService();
+    const service = new TriangulatorService();
     const result = await service.triangulate(query);
 
     console.info(
@@ -194,39 +185,52 @@ export async function POST(
       data: result,
     });
   } catch (error) {
-    if (error instanceof GeminiServiceError) {
+    if (error instanceof TriangulationError) {
       console.error(
-        `[triangulate] GeminiServiceError (${error.phase}): ${error.message}`,
+        `[triangulate] TriangulationError (${error.phase}): ${error.message}`,
         error.cause instanceof Error ? error.cause.message : error.cause ?? ''
       );
 
-      // Validation failures are client errors (bad input)
-      if (error.phase === 'validation') {
-        return errorResponse(error.message, 'VALIDATION_FAILED', 400);
+      // A missing API key is a server configuration problem.
+      if (error.phase === 'config') {
+        return errorResponse(
+          'The service is not configured correctly. Please contact the site owner.',
+          'SERVICE_ERROR',
+          500
+        );
       }
 
-      const upstreamStatus = geminiCauseHttpStatus(error.cause);
+      const upstreamStatus = upstreamHttpStatus(error.cause);
       if (upstreamStatus === 429) {
         return errorResponse(
-          'The Gemini API quota or rate limit was exceeded. Wait a minute and try again, or check limits in Google AI Studio.',
-          'GEMINI_QUOTA_EXCEEDED',
+          'The free-tier rate limit was exceeded (Tavily or Groq). Wait a minute and try again.',
+          'QUOTA_EXCEEDED',
           429
         );
       }
 
-      // Gemini's free tier intermittently returns 503/500 under load. We
-      // already retry with backoff; if it still fails, tell the user it's a
-      // temporary upstream spike rather than a problem with their input.
-      if (upstreamStatus === 503 || upstreamStatus === 500) {
+      // Upstream services intermittently return 5xx under load. Retries already
+      // happened; tell the user it's a temporary upstream spike.
+      if (upstreamStatus && upstreamStatus >= 500) {
         return errorResponse(
-          'Gemini is experiencing high demand right now (free-tier capacity). This is temporary — please try again in a moment.',
+          'A provider (search or AI) is temporarily unavailable. Please try again in a moment.',
           'SERVICE_ERROR',
           503
         );
       }
 
+      // Search phase with no upstream status means we couldn't analyze the
+      // query — no coverage found, or the results didn't match the input.
+      if (error.phase === 'search') {
+        return errorResponse(
+          error.message,
+          'INVALID_INPUT',
+          422
+        );
+      }
+
       return errorResponse(
-        'The AI service encountered an error. Please try again.',
+        'The service encountered an error. Please try again.',
         'SERVICE_ERROR',
         500
       );

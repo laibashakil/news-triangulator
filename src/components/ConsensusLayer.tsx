@@ -1,13 +1,13 @@
 /**
- * ConsensusLayer — The payoff section showing what all sources agree on.
+ * ConsensusLayer — The factual core: what every source agrees on, and the
+ * story with all editorial framing removed.
  *
- * This is the most visually prominent element on the results page.
- * It shows the consensus facts as a clean list and the stripped truth
- * paragraph underneath.
+ * This is the destination of the whole analysis, so it is the one place on
+ * the page with warm "paper" color and the editorial serif — everything else
+ * converges toward it.
  */
 
 import React from 'react';
-import { Card } from './ui/Card';
 
 interface ConsensusLayerProps {
   /** Facts that all three perspectives agree on */
@@ -21,88 +21,63 @@ export function ConsensusLayer({
   strippedTruth,
 }: ConsensusLayerProps) {
   return (
-    <div className="animate-slide-up" style={{ animationDelay: '0.3s' }}>
-      <Card accentColor="white" className="p-6 md:p-8" id="consensus-layer">
-        {/* Consensus facts section */}
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
-              <svg
-                className="w-4 h-4 text-white"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-            </div>
-            <h2 className="text-xl font-bold text-white">
-              What every source agrees on
-            </h2>
-          </div>
+    <section
+      aria-labelledby="core-heading"
+      id="consensus-layer"
+      className="
+        animate-slide-up relative overflow-hidden rounded-xl
+        border border-core/20 bg-gradient-to-b from-core/[0.06] to-transparent
+        p-6 md:p-10
+        shadow-[0_0_80px_-24px_rgba(245,239,227,0.18)]
+      "
+    >
+      {/* Eyebrow */}
+      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-core-dim mb-6">
+        The factual core
+      </p>
+
+      <div className="grid lg:grid-cols-[1.05fr_0.95fr] gap-8 lg:gap-14">
+        {/* Consensus facts */}
+        <div>
+          <h2
+            id="core-heading"
+            className="font-display text-2xl md:text-3xl font-semibold text-core mb-5 leading-tight"
+          >
+            What every source agrees on
+          </h2>
 
           <ul className="space-y-3">
             {consensusFacts.map((fact, index) => (
               <li
                 key={`consensus-${index}`}
-                className="flex items-start gap-3 text-offwhite/85"
+                className="flex items-start gap-3 text-ink-100"
               >
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-white/10 flex items-center justify-center mt-0.5">
-                  <span className="text-xs font-bold text-white/60">
+                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-core/15 flex items-center justify-center mt-0.5">
+                  <span className="text-[11px] font-mono font-medium text-core">
                     {index + 1}
                   </span>
                 </span>
-                <span className="text-sm leading-relaxed">{fact}</span>
+                <span className="text-[15px] leading-relaxed">{fact}</span>
               </li>
             ))}
           </ul>
         </div>
 
-        {/* Divider */}
-        <div className="border-t border-white/10 my-6" />
+        {/* Stripped truth — the story, set as editorial prose */}
+        <div className="border-t border-core/15 pt-8 mt-2 lg:border-t-0 lg:pt-0 lg:mt-0 lg:border-l lg:border-core/15 lg:pl-14">
+          <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-core-dim mb-4">
+            The story without the framing
+          </h3>
 
-        {/* Stripped truth section */}
-        <div>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
-              <svg
-                className="w-4 h-4 text-white"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"
-                />
-              </svg>
-            </div>
-            <h2 className="text-lg font-semibold text-white/80">
-              The story without the framing
-            </h2>
-          </div>
-
-          <div className="text-sm text-offwhite/65 leading-relaxed pl-11">
+          <div className="font-display text-lg md:text-xl text-core/95 leading-relaxed">
             {strippedTruth.split('\n').map((paragraph, index) => (
-              <p
-                key={`truth-${index}`}
-                className={index > 0 ? 'mt-3' : ''}
-              >
+              <p key={`truth-${index}`} className={index > 0 ? 'mt-4' : ''}>
                 {paragraph}
               </p>
             ))}
           </div>
         </div>
-      </Card>
-    </div>
+      </div>
+    </section>
   );
 }

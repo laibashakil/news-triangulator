@@ -1,163 +1,97 @@
 /**
- * Gemini prompt definitions for News Triangulator.
+ * Prompt definitions for News Triangulator.
  *
  * This file is the SINGLE SOURCE OF TRUTH for all AI instructions.
- * Changing prompts should never require touching service code.
+ * The LLM (Groq) never searches the web itself — it analyzes the news results
+ * gathered by Tavily (see search.ts). Prompts therefore work from supplied
+ * search results, not from the model's own knowledge or live browsing.
  *
- * See docs/GEMINI_PROMPTS.md for the reasoning behind each prompt.
+ * See docs/PROMPTS.md for the reasoning behind each prompt.
  */
 
 import type { PerspectiveLabel } from './types';
+import type { PerspectiveSearch } from './search';
 
 /* ──────────────────────────────────────────────────────────────────────
  * System Context
  * ────────────────────────────────────────────────────────────────────── */
 
-/**
- * Role context provided to Gemini across all calls.
- * Sets the model's identity as a neutral media analyst.
- */
-export const SYSTEM_CONTEXT = `You are a senior investigative journalist and media analyst. Your job is to find real news coverage of stories, accurately summarize what different outlets report, identify editorial framing and spin, and extract the factual core that all sources agree on. You never fabricate sources. You only cite outlets you actually found through search. You are politically neutral — you identify bias in all directions without taking sides.`;
+/** Role context provided to the model on every synthesis call. */
+export const SYSTEM_CONTEXT = `You are a senior investigative journalist and media analyst. You are given real news search results from outlets across the political spectrum. Your job is to accurately summarize what each group of outlets reported, identify editorial framing and spin, and extract the factual core that all sources agree on. You work ONLY from the supplied search results — never invent sources, quotes, or facts not present in them. You are politically neutral: you identify bias in all directions without taking sides. You always respond with valid JSON only.`;
 
 /* ──────────────────────────────────────────────────────────────────────
  * Perspective Guidance
  * ────────────────────────────────────────────────────────────────────── */
 
-/** Maps each perspective label to its search guidance for Gemini */
-const PERSPECTIVE_GUIDANCE: Record<PerspectiveLabel, string> = {
-  progressive: `Focus on coverage from progressive-leaning, left-of-center, or liberal outlets. These might include outlets like The Guardian, MSNBC, HuffPost, The New York Times opinion pages, Vox, The Washington Post, Mother Jones, or similar publications known for progressive editorial perspectives.`,
-
-  conservative: `Focus on coverage from conservative-leaning, right-of-center outlets. These might include outlets like Fox News, The Daily Wire, National Review, The Wall Street Journal opinion pages, New York Post, The Federalist, or similar publications known for conservative editorial perspectives.`,
-
-  international: `Focus on coverage from international and non-US outlets to provide a global perspective. These might include outlets like BBC, Al Jazeera, Reuters, Deutsche Welle, The Economist, France 24, South China Morning Post, Dawn, or similar publications that cover the story from outside the American political framework.`,
-};
-
-/** Human-readable descriptions for each perspective */
+/** Human-readable descriptions for each perspective. */
 const PERSPECTIVE_DESCRIPTIONS: Record<PerspectiveLabel, string> = {
-  progressive: 'progressive-leaning and left-of-center',
-  conservative: 'conservative-leaning and right-of-center',
-  international: 'international and non-US',
+  progressive: 'progressive-leaning / left-of-center US outlets',
+  conservative: 'conservative-leaning / right-of-center US outlets',
+  international: 'international and non-US outlets',
 };
 
 /* ──────────────────────────────────────────────────────────────────────
  * Prompt Builders
  * ────────────────────────────────────────────────────────────────────── */
 
-/**
- * Builds the story validation prompt (Call 0).
- * Quickly checks whether the input is actually a news story or claim.
- */
-export function buildStoryValidationPrompt(query: string): string {
-  return `Determine whether the following text is a news story, headline, or factual claim that could be researched through news sources. It does NOT need to be a real story — it just needs to be the kind of thing news outlets would cover.
-
-Text: "${query}"
-
-Respond with ONLY a JSON object, no markdown fencing, no preamble:
-{
-  "isValidNewsQuery": true or false,
-  "reason": "Brief explanation of why this is or isn't a news query"
-}`;
-}
-
-/**
- * Builds the perspective search prompt (Calls 1-3).
- * Instructs Gemini to search for and summarize coverage from a specific
- * ideological orientation. Search Grounding must be enabled for this call.
- */
-export function buildPerspectivePrompt(
-  query: string,
-  perspective: PerspectiveLabel
-): string {
-  const description = PERSPECTIVE_DESCRIPTIONS[perspective];
-  const guidance = PERSPECTIVE_GUIDANCE[perspective];
-
-  return `Search for recent news coverage of the following story from ${description} sources.
-
-Story: "${query}"
-
-${guidance}
-
-Based on what you find, return ONLY a JSON object with no markdown fencing, no preamble:
-{
-  "summary": "A 2-3 paragraph summary of how these sources covered this story",
-  "uniqueClaims": ["Claim or framing point that this perspective uniquely emphasized"],
-  "tone": "A single word describing the overall tone (e.g., alarmed, measured, dismissive, celebratory, cautious, critical)"
-}
-
-Important:
-- Only summarize what the sources actually say. Do not inject your own analysis.
-- The uniqueClaims should be things THIS perspective emphasizes that others might not.
-- Include 3-5 unique claims.
-- The tone should be a single descriptive word.`;
-}
-
-/**
- * Builds one grounded prompt that retrieves progressive, conservative, and
- * international coverage together (single Search Grounding round-trip).
- */
-export function buildAllPerspectivesPrompt(query: string): string {
-  return `Use Google Search to find recent news coverage of the following story. In one research pass, examine how the story is covered through THREE distinct lenses — you must address all three.
-
-Story: "${query}"
-
-LENS 1 — Progressive-leaning and left-of-center outlets:
-${PERSPECTIVE_GUIDANCE.progressive}
-
-LENS 2 — Conservative-leaning and right-of-center outlets:
-${PERSPECTIVE_GUIDANCE.conservative}
-
-LENS 3 — International and non-US outlets:
-${PERSPECTIVE_GUIDANCE.international}
-
-Return ONLY a JSON object with no markdown fencing, no preamble:
-{
-  "progressive": {
-    "summary": "2-3 paragraphs: how progressive-leaning sources covered this",
-    "uniqueClaims": ["3-5 framing points this lens emphasized"],
-    "tone": "single descriptive word"
-  },
-  "conservative": {
-    "summary": "2-3 paragraphs: how conservative-leaning sources covered this",
-    "uniqueClaims": ["3-5 framing points this lens emphasized"],
-    "tone": "single descriptive word"
-  },
-  "international": {
-    "summary": "2-3 paragraphs: how international sources covered this",
-    "uniqueClaims": ["3-5 framing points this lens emphasized"],
-    "tone": "single descriptive word"
+/** Formats one lens's search results into a readable block for the prompt. */
+function formatPerspectiveBlock(perspective: PerspectiveSearch): string {
+  const heading = `${perspective.label.toUpperCase()} — ${PERSPECTIVE_DESCRIPTIONS[perspective.label]}`;
+  if (perspective.results.length === 0) {
+    return `${heading}\n(No coverage found from these outlets.)`;
   }
+  const items = perspective.results
+    .map(
+      (r, i) =>
+        `  ${i + 1}. ${r.title}\n     URL: ${r.url}\n     Excerpt: ${r.content || '(no excerpt)'}`
+    )
+    .join('\n');
+  return `${heading}\n${items}`;
+}
+
+/**
+ * Builds the single synthesis prompt. Takes the original query and the
+ * per-lens search results, and asks the model to produce BOTH the three
+ * structured lenses AND the cross-lens synthesis in one JSON object.
+ */
+export function buildSynthesisPrompt(
+  query: string,
+  perspectives: PerspectiveSearch[]
+): string {
+  const blocks = perspectives.map(formatPerspectiveBlock).join('\n\n');
+
+  return `A user asked to triangulate this news story:
+
+"${query}"
+
+Below are live news search results grouped by the political lean of the outlets. Work ONLY from these results — do not add facts, outlets, or claims that aren't present.
+
+${blocks}
+
+STEP 1 — Relevance check: Do the search results above actually report on the user's query subject ("${query}")? If the query is gibberish, a keyboard mash, random characters, or not a real news topic, the results will just be unrelated recent headlines that share no subject with the query — in that case the analysis is meaningless, so set "relevant" to false and return empty/placeholder values for the other fields. Only set "relevant" to true when the results genuinely cover the query's subject.
+
+STEP 2 — If relevant, produce the full triangulation.
+
+Return ONLY a JSON object with exactly this shape (no markdown, no preamble):
+{
+  "relevant": <true or false per Step 1>,
+  "progressive":  { "summary": "2-3 paragraphs on how these outlets covered it", "uniqueClaims": ["3-5 framing points this lens emphasized"], "tone": "single descriptive word" },
+  "conservative": { "summary": "...", "uniqueClaims": ["..."], "tone": "..." },
+  "international":{ "summary": "...", "uniqueClaims": ["..."], "tone": "..." },
+  "consensusFacts": ["4-8 factual statements that appear across the lenses"],
+  "spinIndicators": {
+    "progressive":  ["what this lens uniquely emphasized or spun"],
+    "conservative": ["..."],
+    "international":["..."]
+  },
+  "strippedTruth": "A 2-3 paragraph factual summary stripped of all editorial framing, written like a neutral wire-service report — just verified facts, actions taken, and documented consequences. No judgment-implying adjectives, no framing that favors any side."
 }
 
 Rules:
-- Only summarize what you actually found in search results. Do not invent outlets or quotes.
-- Each lens must reflect that ideological or geographic slice of coverage, not generic commentary.
-- uniqueClaims should highlight what THAT lens uniquely stresses compared to the others.`;
-}
-
-/**
- * Builds the combined analysis prompt (Call 2).
- *
- * Takes the raw grounded research text from the search call and, in a single
- * schema-constrained pass (no search tool), produces BOTH the three structured
- * lenses AND the synthesis (consensus, spin, stripped truth). Folding the old
- * "structure" and "synthesis" calls into one halves the per-analysis request
- * count — important on the Gemini free-tier daily quota.
- */
-export function buildAnalysisPrompt(researchText: string): string {
-  return `Below are research notes on how a news story was covered across three ideological lenses (progressive, conservative, international). Work ONLY from these notes — do not add new facts, outlets, or claims. If a lens is thin, summarize what little is there rather than inventing detail.
-
-Produce two things:
-
-1. For each lens (progressive, conservative, international):
-   - summary: 2-3 paragraphs on how that lens covered the story
-   - uniqueClaims: 3-5 short framing points that lens emphasized (include what exists if fewer)
-   - tone: a single descriptive word (e.g., alarmed, measured, dismissive, critical)
-
-2. A cross-lens synthesis:
-   - consensusFacts: 4-8 factual statements that genuinely appear across all three lenses
-   - spinIndicators: for each lens, what it uniquely emphasized or spun (framing choices, NOT factual errors)
-   - strippedTruth: a 2-3 paragraph factual summary stripped of all editorial framing, written like a neutral wire-service report — just verified facts, actions taken, and documented consequences. No judgment-implying adjectives, no framing that favors any side.
-
-RESEARCH NOTES:
-${researchText}`;
+- "relevant": set to false ONLY if the search results are clearly about entirely different topics than the user's query (e.g. the query was gibberish, a keyboard mash, or not a researchable news story and the results are unrelated recent headlines). If the results genuinely cover the query's subject, set it to true.
+- If a lens has no coverage, give a short summary saying so, an empty-ish uniqueClaims note, and tone "n/a".
+- summary must reflect ONLY what the supplied excerpts say for that lens.
+- consensusFacts: only facts genuinely supported across the results.
+- spinIndicators: framing choices, NOT factual errors.
+- strippedTruth: neutral, factual, no editorial voice.`;
 }

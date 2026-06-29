@@ -2,7 +2,7 @@
 
 ## Overview
 
-News Triangulator is a Next.js 14 web application that uses **Gemini 2.5 Flash-Lite** via the **Gemini Developer API** (key-based auth) with **Google Search Grounding** to fetch and compare how ideologically distinct news sources covered the same story. It extracts what all sources agree on (consensus facts), what each source uniquely emphasizes (spin layer), and presents a "stripped truth" view of the story beneath all editorial framing.
+News Triangulator is a Next.js 14 web application that pairs **Tavily** (live news search) with **Groq** (`llama-3.3-70b-versatile`, fast LLM synthesis) to fetch and compare how ideologically distinct news outlets covered the same story. It extracts what all sources agree on (consensus facts), what each source uniquely emphasizes (spin layer), and presents a "stripped truth" view of the story beneath all editorial framing. Both services run on free tiers — no Google Cloud, no billing.
 
 ## System Design
 
@@ -22,109 +22,93 @@ News Triangulator is a Next.js 14 web application that uses **Gemini 2.5 Flash-L
 │                                                          │
 │  • Input validation (non-empty, ≤2000 chars)            │
 │  • Rate limiting (10 req/IP/min, in-memory)             │
-│  • Delegates to GeminiService                           │
+│  • Delegates to TriangulatorService                     │
 └─────────────────────────┬───────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────┐
-│              GEMINI SERVICE (src/lib/gemini.ts)          │
+│        TRIANGULATOR SERVICE (src/lib/triangulator.ts)    │
 │                                                          │
-│  0. (Optional) Validate story — only when               │
-│     GEMINI_STORY_VALIDATION=true                        │
-│  1. searchCoverage: ONE grounded call gathers live       │
-│     coverage across all three lenses as research text    │
+│  1. searchAllPerspectives(query)  — src/lib/search.ts    │
 │     ├── Progressive  ─┐                                 │
-│     ├── Conservative  ├── Google Search Grounding       │
-│     └── International ─┘   (free-form text + sources)   │
-│  2. analyzeCoverage: ONE schema-constrained call turns   │
-│     the research into the 3 structured lenses AND the    │
-│     synthesis (consensus, spin, stripped truth)          │
+│     ├── Conservative  ├── 3 Tavily searches (parallel), │
+│     └── International ─┘   each restricted to that lens's │
+│                            outlet list (include_domains) │
 │                                                          │
-│  • All calls retry transient 503/500/429 with backoff   │
-└─────────────────────────┬───────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│      GEMINI DEVELOPER API (gemini-2.5-flash-lite)         │
+│  2. groqJsonCompletion(...)       — src/lib/groq.ts      │
+│     One LLM call (JSON mode) → 3 structured lenses +     │
+│     consensus + spin + stripped truth                   │
 │                                                          │
-│  • SDK: @google/genai (GoogleGenAI, apiKey)             │
-│  • Auth: GEMINI_API_KEY (free tier)                     │
-│  • Grounded call: tools: [{ googleSearch: {} }]         │
-│  • Analysis call: responseSchema (constrained decoding) │
-│  • Grounded response includes groundingMetadata:        │
-│    ├── groundingChunks (source URLs + titles)           │
-│    └── groundingSupports (citation mappings)            │
-└─────────────────────────────────────────────────────────┘
+│  • Search + LLM both retry transient 5xx/429 w/ backoff │
+└───────────────┬─────────────────────────┬───────────────┘
+                │                         │
+                ▼                         ▼
+┌───────────────────────────┐ ┌───────────────────────────┐
+│  TAVILY SEARCH API         │ │  GROQ API (OpenAI-compat)  │
+│  • POST /search per lens   │ │  • llama-3.3-70b-versatile │
+│  • topic: news             │ │  • response_format:        │
+│  • include_domains per lens│ │      json_object           │
+│  • returns title/url/text  │ │  • no web access           │
+│  • Auth: TAVILY_API_KEY    │ │  • Auth: GROQ_API_KEY      │
+└───────────────────────────┘ └───────────────────────────┘
 ```
 
-## Why the Two-Call Pattern?
+## Why This Split?
 
-The application makes **two sequential** Gemini calls per request (plus an optional third for validation):
+The LLM is the wrong tool for searching the web, and most free LLM APIs can't anyway. So the two concerns are separated:
 
-### Call 0: Story Validation (opt-in)
-Disabled by default. Set `GEMINI_STORY_VALIDATION=true` to enable a lightweight pre-flight check that the input is an actual news story or claim, not gibberish. This prevents wasting the grounded search call on invalid input. This call uses a `responseSchema` and does **not** use Search Grounding.
+### Step 1: Search (Tavily, 3 calls)
+`searchAllPerspectives` runs three **parallel** Tavily searches — one per lens — each restricted to that lens's outlets via `include_domains` (see `PERSPECTIVE_DOMAINS` in [src/lib/search.ts](../src/lib/search.ts)). This guarantees the "progressive" results come from progressive outlets, etc., which is more accurate than one undifferentiated search. Tavily returns each result's title, URL, and an extracted content excerpt. Real source URLs are captured per lens.
 
-### Call 1: Grounded Search (`searchCoverage`)
-A single `generateContent` call with Google Search Grounding (`tools: [{ googleSearch: {} }]`) instructs Gemini to research the story through three lenses — progressive, conservative, and international — and write up what it finds as free-form research text. Source URLs and titles are extracted from the response's `groundingMetadata`.
-
-**Why free-form here?** Search Grounding cannot be combined with a `responseSchema` (constrained decoding), so the grounded call's output is unstructured prose. Structuring happens in Call 2, which keeps each lens reliable.
-
-### Call 2: Combined Analysis (`analyzeCoverage`)
-A single schema-constrained call (no search tool) takes the research text and produces **both** outputs at once:
-1. The three structured lenses (summary, unique claims, tone)
-2. The synthesis — **consensus facts**, **spin indicators**, and the **stripped truth**
-
-Because it passes a `responseSchema`, Gemini uses constrained decoding and returns complete, syntactically valid JSON every time. Folding the old separate "structure" and "synthesis" calls into one keeps each triangulation to **two requests** against the free-tier daily quota.
+### Step 2: Synthesis (Groq, 1 call)
+`groqJsonCompletion` sends the grouped results to Groq in **JSON mode** and gets back a single object containing all three structured lenses (summary, unique claims, tone) plus the synthesis — **consensus facts**, **spin indicators**, and the **stripped truth**. The model is instructed to work only from the supplied results, never its own knowledge.
 
 ### Reliability
-Every model call is wrapped in `generateWithRetry`, which retries transient upstream failures (`503` high-demand, `500` internal, `429` rate spikes) with exponential backoff and jitter. Persistent quota exhaustion surfaces to the user as a clear "try again" message.
+The Tavily client throws a typed `SearchError` (with HTTP status); the Groq client retries transient `429`/`5xx` with exponential backoff and jitter before throwing a `GroqError`. The service wraps both in `TriangulationError` (with a `phase`), and the API route maps those to clear HTTP responses. Missing/thin fields in the model output are coerced to sensible defaults so a partial response degrades gracefully instead of failing.
 
-## How Search Grounding Works
+## How Search Works (Tavily)
 
-When `tools: [{ googleSearch: {} }]` is passed in the `config` to `ai.models.generateContent`:
+For each lens, `tavilySearch` issues:
 
-1. Gemini analyzes the prompt and generates one or more Google Search queries
-2. It executes those queries against live Google Search results
-3. It processes the returned web pages and synthesizes the information
-4. The response includes both the generated text AND `groundingMetadata` on each candidate:
-   - `groundingChunks`: Array of source objects with `web.uri` and `web.title`
-   - `groundingSupports`: Maps specific text segments to source indices
-   - `webSearchQueries`: The actual search queries Gemini generated
+```
+POST https://api.tavily.com/search
+Authorization: Bearer $TAVILY_API_KEY
+{ "query": "...", "topic": "news", "search_depth": "basic",
+  "max_results": 5, "include_domains": [ ...lens outlets... ], "days": 30 }
+```
 
-We extract the source names and URLs from `groundingChunks` to populate the `consultedSources` field on the triangulation result. This means the sources shown in the UI are **real outlets that Gemini actually found and cited**, not hallucinated source names.
+The response's `results[]` (each `{ title, url, content }`) become the per-lens coverage. Because every result comes from a real article URL, the sources shown in the UI are genuine — never hallucinated. Source lists are de-duplicated across lenses for the overall `consultedSources`, and kept per-lens for each column.
 
 ## Authentication
 
-The service authenticates to the **Gemini Developer API** with a single API key:
+Two server-side API keys, each a simple bearer token:
 
-- **Key**: read from the `GEMINI_API_KEY` environment variable (`new GoogleGenAI({ apiKey })`)
-- **Local dev**: set `GEMINI_API_KEY` in `.env.local`
-- **Production (Vercel)**: set `GEMINI_API_KEY` in Project Settings → Environment Variables
-- Get a free key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — no billing required
+- `TAVILY_API_KEY` — used by [src/lib/search.ts](../src/lib/search.ts)
+- `GROQ_API_KEY` — used by [src/lib/groq.ts](../src/lib/groq.ts)
 
-The model is set via the `MODEL_ID` constant in [src/lib/gemini.ts](src/lib/gemini.ts) (`gemini-2.5-flash-lite`). See [ENV_SETUP.md](ENV_SETUP.md) for details.
+Set both in `.env.local` for local dev and in Vercel → Project Settings → Environment Variables for production. Get free keys at [app.tavily.com](https://app.tavily.com) and [console.groq.com](https://console.groq.com). See [ENV_SETUP.md](ENV_SETUP.md).
 
 ## Data Flow
 
 1. **User Input**: User pastes a news headline/story/claim into the textarea
-2. **Client State**: `useTriangulate` hook transitions through states: `idle` → `validating` → `fetching-perspectives` → `synthesizing` → `complete`
-3. **API Route**: POST `/api/triangulate` validates input, rate-limits, calls `GeminiService`
-4. **GeminiService**: Orchestrates the two-call flow — grounded search then combined analysis (plus optional validation), parses JSON responses, extracts grounding sources
+2. **Client State**: `useTriangulate` hook transitions through states: `idle` → `fetching-perspectives` → `synthesizing` → `complete`
+3. **API Route**: POST `/api/triangulate` validates input, rate-limits, calls `TriangulatorService`
+4. **TriangulatorService**: runs the 3 Tavily searches, calls Groq once, parses the JSON, attaches per-lens sources, coerces defaults
 5. **Response**: Returns a `TriangulationResult` with three perspectives, consensus facts, spin indicators, and stripped truth
-6. **Rendering**: `ResultsPanel` displays three `PerspectiveColumn` components + `ConsensusLayer`
+6. **Rendering**: `ResultsPanel` displays the three perspective columns + `ConsensusLayer`
 
 ## Component Hierarchy
 
 ```
-layout.tsx (root layout, Inter font, dark theme)
+layout.tsx (root layout, fonts, dark theme)
 └── page.tsx (hero section + main content)
     ├── TriangulatorForm (textarea + submit button)
     ├── LoadingSpinner (multi-stage progress during fetch)
     └── ResultsPanel (orchestrates results display)
-        ├── PerspectiveColumn × 3 (progressive, conservative, international)
-        │   ├── Badge (tone indicator)
+        ├── Perspective columns × 3 (progressive, conservative, international)
+        │   ├── tone badge
         │   ├── SourceChip × N (clickable source pills)
-        │   └── Card (unique claims callout blocks)
+        │   └── unique-claims callouts
         └── ConsensusLayer
             ├── Consensus facts list
             └── Stripped truth paragraph
@@ -132,14 +116,15 @@ layout.tsx (root layout, Inter font, dark theme)
 
 ## Frontend Architecture
 
-- **State Management**: Single `useTriangulate` custom hook manages the entire client-side state machine. No external state libraries needed — the data flow is unidirectional and simple.
-- **Component Pattern**: All UI primitives (`Button`, `Card`, `Badge`, `LoadingSpinner`) are in `src/components/ui/`. Feature-specific components are in `src/components/`.
-- **Styling**: Tailwind CSS with custom design tokens defined in `tailwind.config.ts`. Dark navy background, three perspective accent colors (amber, blue, teal).
-- **TypeScript**: Strict mode enabled. All component props have explicit interfaces. Zero `any` types.
+- **State Management**: Single `useTriangulate` custom hook manages the entire client-side state machine. No external state libraries — the data flow is unidirectional and simple.
+- **Component Pattern**: UI primitives (`Button`, `Badge`, `LoadingSpinner`, …) live in `src/components/ui/`; feature components in `src/components/`.
+- **Styling**: Tailwind CSS with custom design tokens in `tailwind.config.ts`. Dark navy background, three perspective accent colors.
+- **TypeScript**: Strict mode. All component props have explicit interfaces. Zero `any` types.
 
 ## Backend Architecture
 
 - **API Route**: Single POST endpoint at `/api/triangulate`. Handles validation, rate limiting, and error responses.
-- **GeminiService**: Stateless service class instantiated per request. Uses the `@google/genai` SDK in Developer API mode (`new GoogleGenAI({ apiKey })`). Non-grounded calls pass a `responseSchema` for guaranteed-valid JSON; all calls go through `generateWithRetry` for transient-error backoff.
-- **Prompts**: All prompts are defined as exportable constant functions in `src/lib/prompts.ts`. This is the single source of truth — changing AI behavior never requires touching service code.
-- **Error Handling**: Custom `GeminiServiceError` class preserves original error context. API route catches and returns appropriate HTTP status codes; upstream `429`s are surfaced as `GEMINI_QUOTA_EXCEEDED`, and persistent `503`/`500` as a `503` "high demand, try again" message.
+- **TriangulatorService** ([src/lib/triangulator.ts](../src/lib/triangulator.ts)): stateless orchestrator. Calls the search and Groq clients, parses/repairs the JSON, and assembles the `TriangulationResult`.
+- **search.ts / groq.ts**: thin, dependency-free `fetch` clients for Tavily and Groq (no SDK packages). Groq retries transient errors internally.
+- **Prompts**: defined as exportable functions in `src/lib/prompts.ts` — the single source of truth; changing AI behavior never requires touching service code.
+- **Error Handling**: Custom `TriangulationError` (with `phase`: `search` | `synthesis` | `parsing` | `config`) preserves context. The API route maps upstream `429` → `QUOTA_EXCEEDED` (rate-limit), `5xx` → `503` "try again", search-with-no-results → `502`, and missing keys → a `config` 500.

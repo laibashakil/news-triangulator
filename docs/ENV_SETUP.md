@@ -1,73 +1,60 @@
 # Environment & Authentication Setup
 
-News Triangulator calls Gemini through the **Gemini Developer API**, so authentication is handled by a single **`GEMINI_API_KEY`** — no Google Cloud project, billing, or Application Default Credentials required. This document explains how to get a key, where to set it, and which environment variables the app reads.
+News Triangulator uses two free services, each authenticated with a simple API key — no Google Cloud, billing, or Application Default Credentials. This document explains how to get the keys, where to set them, and which environment variables the app reads.
+
+- **Tavily** — live news search ([src/lib/search.ts](../src/lib/search.ts))
+- **Groq** — LLM synthesis ([src/lib/groq.ts](../src/lib/groq.ts))
 
 ---
 
-## Authentication
+## Getting the Keys
 
-The service is created in [src/lib/gemini.ts](../src/lib/gemini.ts) with:
+**Tavily** (`TAVILY_API_KEY`):
+1. Sign up at [app.tavily.com](https://app.tavily.com).
+2. Copy the key (`tvly-…`). Free tier ≈ 1,000 searches/month.
 
-```ts
-new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-```
-
-The `@google/genai` SDK reads the key from the environment and authenticates against the Gemini Developer API. If `GEMINI_API_KEY` is missing, the service throws a clear configuration error rather than failing mid-request.
-
-### Getting a Key
-
-1. Visit [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
-2. Click **Create API key** — the free tier needs no billing.
-3. Use the key locally (in `.env.local`) and in Vercel (project environment variables).
+**Groq** (`GROQ_API_KEY`):
+1. Sign up at [console.groq.com](https://console.groq.com).
+2. Create a key (`gsk_…`). Free tier is generous and fast.
 
 ### Local Development
 
 ```bash
 cp .env.example .env.local
 # edit .env.local and set:
-# GEMINI_API_KEY=your-key-here
+# TAVILY_API_KEY=tvly-...
+# GROQ_API_KEY=gsk_...
 
 pnpm dev
 ```
 
 ### Production (Vercel)
 
-Add `GEMINI_API_KEY` under **Project Settings → Environment Variables**, then deploy. See [DEPLOYMENT.md](DEPLOYMENT.md) for the full walk-through.
-
-### Model Selection
-
-The model is set in [src/lib/gemini.ts](../src/lib/gemini.ts):
-
-```ts
-const MODEL_ID = 'gemini-2.5-flash-lite';
-```
-
-`gemini-2.5-flash-lite` is the default because it has a generous free-tier daily quota and still supports Google Search grounding. Change it to `gemini-2.5-flash` for higher answer quality (lower free quota) or another grounding-capable model as needed.
+Add both keys under **Project Settings → Environment Variables**, then deploy. See [DEPLOYMENT.md](DEPLOYMENT.md) for the full walk-through.
 
 ---
 
 ## Environment Variables
 
-### `GEMINI_API_KEY` (required)
+### `TAVILY_API_KEY` (required)
 
 | Property | Value |
 |----------|-------|
 | **Required** | Yes |
-| **Source** | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
-| **Used by** | Server-side only ([src/lib/gemini.ts](../src/lib/gemini.ts)) |
+| **Source** | [app.tavily.com](https://app.tavily.com) |
+| **Used by** | Server-side only ([src/lib/search.ts](../src/lib/search.ts)) |
 
-The free Gemini Developer API key. Without it the API route returns a configuration error. Never expose it to the browser — it has no `NEXT_PUBLIC_` prefix and must stay server-side.
+Authenticates the live news search. Without it the API route returns a configuration error.
 
-### `GEMINI_STORY_VALIDATION` (optional)
+### `GROQ_API_KEY` (required)
 
 | Property | Value |
 |----------|-------|
-| **Required** | No |
-| **Default** | unset (validation skipped) |
-| **Values** | `true` to enable |
-| **Used by** | Server-side only |
+| **Required** | Yes |
+| **Source** | [console.groq.com](https://console.groq.com) |
+| **Used by** | Server-side only ([src/lib/groq.ts](../src/lib/groq.ts)) |
 
-When `true`, the flow runs an extra pre-flight Gemini call to verify the input is a plausible news story before spending the grounded search. Off by default to conserve the free-tier daily quota.
+Authenticates the LLM synthesis call. Without it the API route returns a configuration error.
 
 ### `NEXT_PUBLIC_APP_URL` (optional)
 
@@ -86,26 +73,36 @@ Set automatically by Next.js (`development` under `next dev`, `production` in a 
 
 ---
 
+## Tuning (in code, not env)
+
+| Setting | Location | Default |
+|---------|----------|---------|
+| Outlets searched per lens | `PERSPECTIVE_DOMAINS` in [src/lib/search.ts](../src/lib/search.ts) | curated lists |
+| Results per lens / recency window | `MAX_RESULTS_PER_LENS`, `RECENCY_DAYS` in [src/lib/search.ts](../src/lib/search.ts) | 5 results, 30 days |
+| LLM model | `GROQ_MODEL` in [src/lib/groq.ts](../src/lib/groq.ts) | `llama-3.3-70b-versatile` |
+
+---
+
 ## Local `.env.local` Template
 
 ```env
 # .env.local — DO NOT COMMIT THIS FILE
 
-# Required: free Gemini API key from https://aistudio.google.com/apikey
-GEMINI_API_KEY=your-key-here
+# Required: free Tavily key from https://app.tavily.com
+TAVILY_API_KEY=tvly-...
+
+# Required: free Groq key from https://console.groq.com
+GROQ_API_KEY=gsk_...
 
 # Optional: app URL (defaults to http://localhost:3000 in dev)
 NEXT_PUBLIC_APP_URL=http://localhost:3000
-
-# Optional: enable the pre-flight validation call (off by default)
-# GEMINI_STORY_VALIDATION=true
 ```
 
 ---
 
 ## Security Notes
 
-- `.gitignore` already excludes `.env*` files except `.env.example` — verify your key never appears in `git status`.
-- `GEMINI_API_KEY` is read server-side only. It is never bundled into client code.
-- `NEXT_PUBLIC_`-prefixed variables are exposed to the browser at build time; never put the API key (or any secret) in one.
-- If a key is ever committed or leaked, revoke it in Google AI Studio and create a new one.
+- `.gitignore` already excludes `.env*` files except `.env.example` — verify your keys never appear in `git status`.
+- Both keys are read server-side only; they are never bundled into client code.
+- `NEXT_PUBLIC_`-prefixed variables are exposed to the browser at build time; never put an API key in one.
+- If a key leaks, revoke it in the Tavily/Groq dashboard and create a new one.
