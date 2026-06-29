@@ -91,28 +91,36 @@ Set both in `.env.local` for local dev and in Vercel → Project Settings → En
 ## Data Flow
 
 1. **User Input**: User pastes a news headline/story/claim into the textarea
-2. **Client State**: `useTriangulate` hook transitions through states: `idle` → `fetching-perspectives` → `synthesizing` → `complete`
+2. **Client State**: `useTriangulate` hook (`src/hooks/useTriangulate.ts`) transitions through states: `idle` → `validating` → `fetching-perspectives` → `synthesizing` → `complete` (or `error` from any stage)
 3. **API Route**: POST `/api/triangulate` validates input, rate-limits, calls `TriangulatorService`
 4. **TriangulatorService**: runs the 3 Tavily searches, calls Groq once, parses the JSON, attaches per-lens sources, coerces defaults
 5. **Response**: Returns a `TriangulationResult` with three perspectives, consensus facts, spin indicators, and stripped truth
-6. **Rendering**: `ResultsPanel` displays the three perspective columns + `ConsensusLayer`
+6. **Rendering**: `ResultsPanel` leads with `ConsensusLayer` (the factual core), then `PerspectiveComparison` (a 4-row aligned grid on desktop, tabbed interface on mobile), then the de-duplicated source list and timestamp
 
 ## Component Hierarchy
 
 ```
 layout.tsx (root layout, fonts, dark theme)
 └── page.tsx (hero section + main content)
-    ├── TriangulatorForm (textarea + submit button)
-    ├── LoadingSpinner (multi-stage progress during fetch)
+    ├── TriangulatorForm (textarea + quick-fill chips + submit button)
+    ├── LoadingSpinner (multi-stage progress: validating → fetching → synthesizing)
     └── ResultsPanel (orchestrates results display)
-        ├── Perspective columns × 3 (progressive, conservative, international)
-        │   ├── tone badge
-        │   ├── SourceChip × N (clickable source pills)
-        │   └── unique-claims callouts
-        └── ConsensusLayer
-            ├── Consensus facts list
-            └── Stripped truth paragraph
+        ├── ConsensusLayer (factual core — shown first, the payoff)
+        │   ├── Consensus facts list (numbered)
+        │   └── Stripped truth paragraph
+        ├── PerspectiveComparison (how each side framed it)
+        │   ├── TriangleDiagram (three-vertex visual anchor)
+        │   ├── Desktop (lg+): 4-row aligned comparison grid
+        │   │   ├── Row: Sources — SourceChip × N per lens
+        │   │   ├── Row: Summary — paragraph per lens
+        │   │   ├── Row: Unique angle — claim list per lens
+        │   │   └── Row: Spin & framing — spin indicators per lens
+        │   └── Mobile (<lg): accessible tabbed interface (one perspective at a time)
+        │       └── Same four rows per tab, full keyboard nav (arrow keys, Home, End)
+        └── Consulted sources + analysis timestamp
 ```
+
+**UI primitives** in `src/components/ui/`: `Button`, `Badge`, `LoadingSpinner`, `Card`, `TriangleDiagram`, `VertexMark`.
 
 ## Frontend Architecture
 

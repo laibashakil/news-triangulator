@@ -69,7 +69,7 @@ Open [http://localhost:3000](http://localhost:3000) and paste a news headline.
 1. **You paste a news story, headline, or claim**
 2. **Three targeted searches** — Tavily runs one news search per lens, each restricted to that lens's outlets (e.g. Guardian/MSNBC/NYT for progressive, Fox/WSJ/National Review for conservative, BBC/Reuters/Al Jazeera for international)
 3. **AI synthesis** — one Groq call (JSON mode) reads the results and produces the three structured lenses plus consensus facts, per-lens spin, and a stripped-truth summary
-4. **Visual comparison** — three columns show each perspective's coverage, real source links, and unique claims
+4. **Visual comparison** — an aligned four-row grid (Sources, Summary, Unique angle, Spin & framing) lets you scan the three perspectives side by side on desktop; on mobile, an accessible tab interface shows one perspective at a time
 5. **The truth layer** — the bottom section shows what every source agrees on — the factual skeleton beneath all editorial framing
 
 > Because each lens is searched against its own outlet list, the perspective columns reflect genuinely different slices of coverage rather than one undifferentiated search.
