@@ -4,6 +4,8 @@
 
 News Triangulator pairs **Tavily** (live news search) with **Groq** (fast LLM synthesis) to search ideologically distinct news outlets, compare their coverage, and extract the factual core that survives triangulation — all on free tiers, no billing required.
 
+https://github.com/user-attachments/assets/8c5b3611-4c1f-4608-930e-475a79483954
+
 ## Live Deployment
 
 | | |
