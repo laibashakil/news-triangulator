@@ -7,7 +7,7 @@
  * See docs/GEMINI_PROMPTS.md for the reasoning behind each prompt.
  */
 
-import type { Perspective, PerspectiveLabel } from './types';
+import type { PerspectiveLabel } from './types';
 
 /* ──────────────────────────────────────────────────────────────────────
  * System Context
@@ -135,39 +135,29 @@ Rules:
 }
 
 /**
- * Builds the synthesis prompt (Call 4).
- * Takes the three perspective summaries and extracts consensus facts,
- * spin indicators, and the stripped truth paragraph.
+ * Builds the combined analysis prompt (Call 2).
+ *
+ * Takes the raw grounded research text from the search call and, in a single
+ * schema-constrained pass (no search tool), produces BOTH the three structured
+ * lenses AND the synthesis (consensus, spin, stripped truth). Folding the old
+ * "structure" and "synthesis" calls into one halves the per-analysis request
+ * count — important on the Gemini free-tier daily quota.
  */
-export function buildSynthesisPrompt(perspectives: Perspective[]): string {
-  const perspectiveBlocks = perspectives
-    .map(
-      (p) => `${p.label.toUpperCase()} PERSPECTIVE:
-Summary: ${p.summary}
-Unique Claims: ${p.uniqueClaims.join('; ')}
-Tone: ${p.tone}`
-    )
-    .join('\n\n');
+export function buildAnalysisPrompt(researchText: string): string {
+  return `Below are research notes on how a news story was covered across three ideological lenses (progressive, conservative, international). Work ONLY from these notes — do not add new facts, outlets, or claims. If a lens is thin, summarize what little is there rather than inventing detail.
 
-  return `You are analyzing three different perspectives on the same news story. Each perspective comes from a different ideological orientation of media coverage.
+Produce two things:
 
-${perspectiveBlocks}
+1. For each lens (progressive, conservative, international):
+   - summary: 2-3 paragraphs on how that lens covered the story
+   - uniqueClaims: 3-5 short framing points that lens emphasized (include what exists if fewer)
+   - tone: a single descriptive word (e.g., alarmed, measured, dismissive, critical)
 
-Analyze these three perspectives and return ONLY a JSON object with no markdown fencing, no preamble:
-{
-  "consensusFacts": [
-    "Factual statement that all three perspectives agree on"
-  ],
-  "spinIndicators": {
-    "progressive": ["What the progressive coverage uniquely emphasized or spun"],
-    "conservative": ["What the conservative coverage uniquely emphasized or spun"],
-    "international": ["What the international coverage uniquely emphasized or spun"]
-  },
-  "strippedTruth": "A 2-3 paragraph factual summary of the story stripped of all editorial framing. Write this as a neutral wire-service report would — just the verified facts, actions taken, and their documented consequences. No adjectives that imply judgment. No framing that favors any side."
-}
+2. A cross-lens synthesis:
+   - consensusFacts: 4-8 factual statements that genuinely appear across all three lenses
+   - spinIndicators: for each lens, what it uniquely emphasized or spun (framing choices, NOT factual errors)
+   - strippedTruth: a 2-3 paragraph factual summary stripped of all editorial framing, written like a neutral wire-service report — just verified facts, actions taken, and documented consequences. No judgment-implying adjectives, no framing that favors any side.
 
-Rules:
-- consensusFacts should contain 4-8 facts that genuinely appear across all three perspectives.
-- spinIndicators should highlight framing choices, NOT factual errors.
-- strippedTruth must read like a wire service report: neutral, factual, no editorial voice.`;
+RESEARCH NOTES:
+${researchText}`;
 }

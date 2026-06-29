@@ -148,6 +148,13 @@ export interface SynthesisRawResponse {
   strippedTruth: string;
 }
 
+/**
+ * Raw JSON from the single post-search analysis call, which produces the three
+ * structured lenses AND the synthesis in one schema-constrained response.
+ */
+export type FullAnalysisRawResponse = AllPerspectivesRawResponse &
+  SynthesisRawResponse;
+
 /* ──────────────────────────────────────────────────────────────────────
  * Custom Error
  * ────────────────────────────────────────────────────────────────────── */
@@ -157,7 +164,7 @@ export class GeminiServiceError extends Error {
   /** The original error that caused this failure */
   public readonly cause: unknown;
   /** Which phase of the pipeline failed */
-  public readonly phase: 'validation' | 'perspective' | 'synthesis' | 'parsing';
+  public readonly phase: 'validation' | 'perspective' | 'synthesis' | 'parsing' | 'config';
 
   constructor(message: string, phase: GeminiServiceError['phase'], cause?: unknown) {
     super(message);

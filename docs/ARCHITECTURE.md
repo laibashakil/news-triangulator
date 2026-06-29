@@ -2,7 +2,7 @@
 
 ## Overview
 
-News Triangulator is a Next.js 14 web application that uses **Gemini 2.5 Flash** on **Vertex AI** with **Google Search Grounding** to fetch and compare how ideologically distinct news sources covered the same story. It extracts what all sources agree on (consensus facts), what each source uniquely emphasizes (spin layer), and presents a "stripped truth" view of the story beneath all editorial framing.
+News Triangulator is a Next.js 14 web application that uses **Gemini 2.5 Flash-Lite** via the **Gemini Developer API** (key-based auth) with **Google Search Grounding** to fetch and compare how ideologically distinct news sources covered the same story. It extracts what all sources agree on (consensus facts), what each source uniquely emphasizes (spin layer), and presents a "stripped truth" view of the story beneath all editorial framing.
 
 ## System Design
 
@@ -31,21 +31,27 @@ News Triangulator is a Next.js 14 web application that uses **Gemini 2.5 Flash**
 │                                                          │
 │  0. (Optional) Validate story — only when               │
 │     GEMINI_STORY_VALIDATION=true                        │
-│  1. Fetch all three perspectives in ONE grounded call   │
+│  1. searchCoverage: ONE grounded call gathers live       │
+│     coverage across all three lenses as research text    │
 │     ├── Progressive  ─┐                                 │
 │     ├── Conservative  ├── Google Search Grounding       │
-│     └── International ─┘   (single generate_content)    │
-│  2. Synthesize: extract consensus, spin, stripped truth  │
+│     └── International ─┘   (free-form text + sources)   │
+│  2. analyzeCoverage: ONE schema-constrained call turns   │
+│     the research into the 3 structured lenses AND the    │
+│     synthesis (consensus, spin, stripped truth)          │
+│                                                          │
+│  • All calls retry transient 503/500/429 with backoff   │
 └─────────────────────────┬───────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────┐
-│      VERTEX AI / GEMINI (gemini-2.5-flash)                │
+│      GEMINI DEVELOPER API (gemini-2.5-flash-lite)         │
 │                                                          │
-│  • SDK: @google/genai (GoogleGenAI, vertexai: true)     │
-│  • Auth: Application Default Credentials (ADC)          │
-│  • tools: [{ googleSearch: {} }]                        │
-│  • Returns: text + groundingMetadata                    │
+│  • SDK: @google/genai (GoogleGenAI, apiKey)             │
+│  • Auth: GEMINI_API_KEY (free tier)                     │
+│  • Grounded call: tools: [{ googleSearch: {} }]         │
+│  • Analysis call: responseSchema (constrained decoding) │
+│  • Grounded response includes groundingMetadata:        │
 │    ├── groundingChunks (source URLs + titles)           │
 │    └── groundingSupports (citation mappings)            │
 └─────────────────────────────────────────────────────────┘
@@ -56,20 +62,22 @@ News Triangulator is a Next.js 14 web application that uses **Gemini 2.5 Flash**
 The application makes **two sequential** Gemini calls per request (plus an optional third for validation):
 
 ### Call 0: Story Validation (opt-in)
-Disabled by default. Set `GEMINI_STORY_VALIDATION=true` to enable a lightweight pre-flight check that the input is an actual news story or claim, not gibberish. This prevents wasting the grounded search call on invalid input. This call does **not** use Search Grounding.
+Disabled by default. Set `GEMINI_STORY_VALIDATION=true` to enable a lightweight pre-flight check that the input is an actual news story or claim, not gibberish. This prevents wasting the grounded search call on invalid input. This call uses a `responseSchema` and does **not** use Search Grounding.
 
-### Call 1: Combined Perspective Fetch (Google Search Grounded)
-A single `generateContent` call instructs Gemini to research the story through three lenses — progressive, conservative, and international — and return all three perspectives in one JSON response. Google Search Grounding (`tools: [{ googleSearch: {} }]`) lets Gemini run live searches during this call.
+### Call 1: Grounded Search (`searchCoverage`)
+A single `generateContent` call with Google Search Grounding (`tools: [{ googleSearch: {} }]`) instructs Gemini to research the story through three lenses — progressive, conservative, and international — and write up what it finds as free-form research text. Source URLs and titles are extracted from the response's `groundingMetadata`.
 
-**Why one call instead of three parallel ones?** Vertex AI's grounded search endpoint is counted per `generate_content` request toward daily quota. Bundling three lenses into one grounded call uses one-third the quota while still producing differentiated perspectives (the prompt enumerates each lens explicitly with its own output slot). The latency cost is modest because the heavy work — Google Search + page fetching — still parallelizes internally.
+**Why free-form here?** Search Grounding cannot be combined with a `responseSchema` (constrained decoding), so the grounded call's output is unstructured prose. Structuring happens in Call 2, which keeps each lens reliable.
 
-### Call 2: Synthesis
-Takes the three perspective summaries from Call 1 and asks Gemini to:
-1. Extract **consensus facts** — things all three perspectives agree on
-2. Identify **spin indicators** — what each perspective uniquely emphasized or framed
-3. Write the **stripped truth** — a factual skeleton of the story with all editorial framing removed
+### Call 2: Combined Analysis (`analyzeCoverage`)
+A single schema-constrained call (no search tool) takes the research text and produces **both** outputs at once:
+1. The three structured lenses (summary, unique claims, tone)
+2. The synthesis — **consensus facts**, **spin indicators**, and the **stripped truth**
 
-This call does NOT use Search Grounding because it operates purely on the already-gathered data.
+Because it passes a `responseSchema`, Gemini uses constrained decoding and returns complete, syntactically valid JSON every time. Folding the old separate "structure" and "synthesis" calls into one keeps each triangulation to **two requests** against the free-tier daily quota.
+
+### Reliability
+Every model call is wrapped in `generateWithRetry`, which retries transient upstream failures (`503` high-demand, `500` internal, `429` rate spikes) with exponential backoff and jitter. Persistent quota exhaustion surfaces to the user as a clear "try again" message.
 
 ## How Search Grounding Works
 
@@ -87,20 +95,21 @@ We extract the source names and URLs from `groundingChunks` to populate the `con
 
 ## Authentication
 
-The service authenticates to Vertex AI using **Application Default Credentials (ADC)**:
+The service authenticates to the **Gemini Developer API** with a single API key:
 
-- **Local dev**: `gcloud auth application-default login` stores credentials in your user config
-- **Cloud Run**: the service's runtime service account is used automatically — grant it `roles/aiplatform.user` on the project
-- **No API keys** are read by the service
+- **Key**: read from the `GEMINI_API_KEY` environment variable (`new GoogleGenAI({ apiKey })`)
+- **Local dev**: set `GEMINI_API_KEY` in `.env.local`
+- **Production (Vercel)**: set `GEMINI_API_KEY` in Project Settings → Environment Variables
+- Get a free key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — no billing required
 
-The project ID (`news-triangulator`) and location (`us-central1`) are hardcoded in [src/lib/gemini.ts](src/lib/gemini.ts). Change those constants if deploying to another project or region.
+The model is set via the `MODEL_ID` constant in [src/lib/gemini.ts](src/lib/gemini.ts) (`gemini-2.5-flash-lite`). See [ENV_SETUP.md](ENV_SETUP.md) for details.
 
 ## Data Flow
 
 1. **User Input**: User pastes a news headline/story/claim into the textarea
 2. **Client State**: `useTriangulate` hook transitions through states: `idle` → `validating` → `fetching-perspectives` → `synthesizing` → `complete`
 3. **API Route**: POST `/api/triangulate` validates input, rate-limits, calls `GeminiService`
-4. **GeminiService**: Orchestrates the two-call flow (plus optional validation), parses JSON responses, extracts grounding sources
+4. **GeminiService**: Orchestrates the two-call flow — grounded search then combined analysis (plus optional validation), parses JSON responses, extracts grounding sources
 5. **Response**: Returns a `TriangulationResult` with three perspectives, consensus facts, spin indicators, and stripped truth
 6. **Rendering**: `ResultsPanel` displays three `PerspectiveColumn` components + `ConsensusLayer`
 
@@ -131,6 +140,6 @@ layout.tsx (root layout, Inter font, dark theme)
 ## Backend Architecture
 
 - **API Route**: Single POST endpoint at `/api/triangulate`. Handles validation, rate limiting, and error responses.
-- **GeminiService**: Stateless service class instantiated per request. Uses the `@google/genai` SDK in Vertex AI mode (`new GoogleGenAI({ vertexai: true, project, location })`).
+- **GeminiService**: Stateless service class instantiated per request. Uses the `@google/genai` SDK in Developer API mode (`new GoogleGenAI({ apiKey })`). Non-grounded calls pass a `responseSchema` for guaranteed-valid JSON; all calls go through `generateWithRetry` for transient-error backoff.
 - **Prompts**: All prompts are defined as exportable constant functions in `src/lib/prompts.ts`. This is the single source of truth — changing AI behavior never requires touching service code.
-- **Error Handling**: Custom `GeminiServiceError` class preserves original error context. API route catches and returns appropriate HTTP status codes; upstream 429s from Vertex are surfaced as `GEMINI_QUOTA_EXCEEDED`.
+- **Error Handling**: Custom `GeminiServiceError` class preserves original error context. API route catches and returns appropriate HTTP status codes; upstream `429`s are surfaced as `GEMINI_QUOTA_EXCEEDED`, and persistent `503`/`500` as a `503` "high demand, try again" message.

@@ -35,14 +35,25 @@ An honest assessment of what News Triangulator does well, what it doesn't, and w
 
 **What production would require**: Redis or Cloud Memorystore for distributed rate limiting. For a hackathon demo, in-memory is fine — you have one instance and you just need to prevent accidental API key hammering during a live presentation.
 
+## Free-Tier Daily Request Quota
+
+**The limitation**: The app runs on the **free Gemini Developer API**, which enforces a per-day request cap that varies by model. Each triangulation makes **2 requests** (one grounded search + one combined analysis), so the number of analyses per day is bounded by `daily_quota / 2`.
+
+**What this means in practice**:
+- Under real traffic the app can hit the daily limit and return a `429` / "try again" message until the quota resets (~24h)
+- The default model is `gemini-2.5-flash-lite` specifically because it has a more generous free daily allowance than the full flash model while still supporting grounding
+- The free tier also occasionally returns transient `503` "high demand" errors
+
+**Mitigation**: All model calls retry transient `503`/`500`/`429` errors with exponential backoff. Persistent quota exhaustion is surfaced as a clear user-facing message rather than a crash. For higher limits you'd switch `MODEL_ID`, move to a paid tier, or add caching.
+
 ## No Offline / Cached Results
 
-**The limitation**: Every triangulation request makes 2 live Vertex AI calls — one grounded Google Search call and one synthesis call (a third runs when `GEMINI_STORY_VALIDATION=true`). There is no caching layer.
+**The limitation**: Every triangulation request makes 2 live Gemini Developer API calls — one grounded Google Search call and one combined analysis call (a third runs when `GEMINI_STORY_VALIDATION=true`). There is no caching layer.
 
 **What this means**:
 - The same query entered twice will produce different results (because Gemini may find different sources each time)
 - Results cannot be retrieved after the browser tab is closed
-- Each analysis costs Vertex AI quota — the grounded-search call counts against the stricter grounding quota
+- Each analysis consumes free-tier request quota (see above)
 
 **Why we accept this**: Caching news analysis would create a stale-data problem. News coverage changes hour by hour — yesterday's spin layer may not match today's. For a production version, you'd want a TTL-based cache (maybe 1 hour), but for a demo the live-search aspect is actually a feature, not a bug.
 
@@ -56,9 +67,9 @@ An honest assessment of what News Triangulator does well, what it doesn't, and w
 
 ## JSON Parsing Fragility
 
-**The limitation**: We ask Gemini to return raw JSON with no markdown fencing. It usually complies, but occasionally wraps responses in ` ```json ... ``` ` blocks or adds preamble text.
+**The limitation**: The grounded search call cannot use a response schema (constrained decoding is incompatible with the `googleSearch` tool), so its output is free-form text.
 
-**Mitigation**: The `GeminiService` class has defensive parsing that strips markdown fences and retries. This handles 99% of formatting issues. The remaining 1% results in a user-facing error message asking them to try again.
+**Mitigation**: The grounded call's output is deliberately treated as unstructured research and never parsed as JSON. The structuring/synthesis call **does** pass a `responseSchema`, so Gemini returns valid JSON by construction. The `GeminiService` parser adds defensive fallbacks (strip markdown fences, isolate the outer object, drop trailing commas) as a backstop. Together these make malformed JSON reaching the UI effectively a non-issue; any residual failure surfaces as a "try again" message.
 
 ## Single-Language Support
 

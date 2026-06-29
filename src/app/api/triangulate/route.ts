@@ -95,12 +95,23 @@ function geminiCauseHttpStatus(cause: unknown): number | undefined {
       if (typeof status === 'number' && status >= 400) return status;
       const code = o.code;
       if (typeof code === 'number' && code >= 400) return code;
+      // @google/genai often nests the real status as { error: { code } }
+      const nested = o.error as Record<string, unknown> | undefined;
+      if (nested && typeof nested.code === 'number' && nested.code >= 400) {
+        return nested.code;
+      }
     }
     cur =
       typeof cur === 'object' && cur !== null && 'cause' in cur
         ? (cur as { cause: unknown }).cause
         : undefined;
   }
+  // Last resort: the SDK frequently throws an Error whose message is the raw
+  // JSON body — sniff the common transient/quota statuses out of the text.
+  const msg = cause instanceof Error ? cause.message : String(cause ?? '');
+  if (/\b503\b|UNAVAILABLE|high demand/i.test(msg)) return 503;
+  if (/\b429\b|RESOURCE_EXHAUSTED/i.test(msg)) return 429;
+  if (/\b500\b|INTERNAL/i.test(msg)) return 500;
   return undefined;
 }
 
@@ -197,9 +208,20 @@ export async function POST(
       const upstreamStatus = geminiCauseHttpStatus(error.cause);
       if (upstreamStatus === 429) {
         return errorResponse(
-          'The Gemini API quota or rate limit was exceeded. Wait a minute and try again, or check billing and limits in Google AI Studio.',
+          'The Gemini API quota or rate limit was exceeded. Wait a minute and try again, or check limits in Google AI Studio.',
           'GEMINI_QUOTA_EXCEEDED',
           429
+        );
+      }
+
+      // Gemini's free tier intermittently returns 503/500 under load. We
+      // already retry with backoff; if it still fails, tell the user it's a
+      // temporary upstream spike rather than a problem with their input.
+      if (upstreamStatus === 503 || upstreamStatus === 500) {
+        return errorResponse(
+          'Gemini is experiencing high demand right now (free-tier capacity). This is temporary — please try again in a moment.',
+          'SERVICE_ERROR',
+          503
         );
       }
 

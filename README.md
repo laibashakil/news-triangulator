@@ -2,22 +2,23 @@
 
 > **See the truth beneath the headlines.** Paste any news story and see how progressive, conservative, and international sources covered it differently — then read what all versions actually agree on.
 
-News Triangulator uses **Gemini 2.5 Flash** with **Google Search Grounding** on **Vertex AI** to perform live searches across ideologically distinct news sources, compare their coverage, and extract the factual core that survives triangulation.
+News Triangulator uses **Gemini 2.5 Flash-Lite** with **Google Search Grounding** (via the free **Gemini Developer API**) to perform live searches across ideologically distinct news sources, compare their coverage, and extract the factual core that survives triangulation.
 
 ## Live Deployment
 
 | | |
 |---|---|
-| **URL** | https://news-triangulator-806899382949.us-central1.run.app |
-| **Platform** | Google Cloud Run (us-central1) |
-| **Image** | `us-central1-docker.pkg.dev/news-triangulator/news-triangulator-repo/news-triangulator:latest` |
-| **Auth** | Compute Engine default service account (no API key needed) |
+| **Platform** | Vercel (free tier) |
+| **AI** | Gemini Developer API free tier (API-key auth) |
+| **Env var** | `GEMINI_API_KEY` — set in Vercel → Project Settings → Environment Variables |
 
-To redeploy after changes:
-```bash
-gcloud builds submit --tag us-central1-docker.pkg.dev/news-triangulator/news-triangulator-repo/news-triangulator:latest --region=us-central1 .
-gcloud run deploy news-triangulator --image=us-central1-docker.pkg.dev/news-triangulator/news-triangulator-repo/news-triangulator:latest --platform=managed --region=us-central1 --allow-unauthenticated --port=8080 --set-env-vars=NODE_ENV=production --memory=1Gi --cpu=1
-```
+To deploy:
+1. Push to GitHub.
+2. Import the repo at [vercel.com](https://vercel.com) (Next.js is auto-detected).
+3. Add `GEMINI_API_KEY` under **Project Settings → Environment Variables** (get a free key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)).
+4. Deploy. Pushes to `main` auto-redeploy.
+
+> **Free-tier note:** each analysis makes **2 Gemini calls** (one grounded search + one combined structure/synthesis). The free Developer API has a daily request cap that varies by model, so heavy traffic can hit rate limits — the app retries transient `503`/`429` errors with backoff and surfaces a clear "try again" message when the daily quota is exhausted.
 
 ## Tech Stack
 
@@ -26,10 +27,10 @@ gcloud run deploy news-triangulator --image=us-central1-docker.pkg.dev/news-tria
 | **Framework** | Next.js 14 (App Router) |
 | **Language** | TypeScript (strict mode) |
 | **Styling** | Tailwind CSS |
-| **AI** | Gemini 2.5 Flash on Vertex AI via the `@google/genai` SDK |
+| **AI** | Gemini 2.5 Flash-Lite via the `@google/genai` SDK (Developer API mode) |
 | **Search** | Google Search Grounding (live web search) |
-| **Auth** | Google Cloud Application Default Credentials (ADC) |
-| **Deployment** | Docker → Google Cloud Run |
+| **Auth** | `GEMINI_API_KEY` (free Gemini Developer API key) |
+| **Deployment** | Vercel |
 | **Package Manager** | pnpm |
 
 ## Quick Start
@@ -37,8 +38,8 @@ gcloud run deploy news-triangulator --image=us-central1-docker.pkg.dev/news-tria
 ### Prerequisites
 - Node.js 20+
 - pnpm (`npm install -g pnpm`)
-- Google Cloud CLI ([`gcloud`](https://cloud.google.com/sdk/docs/install)) authenticated to a project where the **Vertex AI API** is enabled and billing is on
-- The project ID hardcoded in [src/lib/gemini.ts](src/lib/gemini.ts) is `news-triangulator` in `us-central1`; change those constants if you deploy to a different project/region
+- A free **Gemini API key** from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (no billing required)
+- The model is set in [src/lib/gemini.ts](src/lib/gemini.ts) via `MODEL_ID` (`gemini-2.5-flash-lite`); change it there to trade quality for a higher/lower free-tier daily quota
 
 ### Setup
 
@@ -50,13 +51,9 @@ cd news-triangulator
 # Install dependencies
 pnpm install
 
-# Authenticate to Google Cloud (one-time, for local dev)
-gcloud auth application-default login
-gcloud config set project news-triangulator
-gcloud services enable aiplatform.googleapis.com
-
-# (Optional) copy the env template for non-secret settings
+# Add your Gemini API key
 cp .env.example .env.local
+# then edit .env.local and set GEMINI_API_KEY=...
 
 # Start the dev server
 pnpm dev
@@ -64,13 +61,13 @@ pnpm dev
 
 Open [http://localhost:3000](http://localhost:3000) and paste a news headline.
 
-> **No API key required.** The Vertex AI SDK picks up your ADC credentials automatically. See [docs/ENV_SETUP.md](docs/ENV_SETUP.md) for service-account setup and other environment details.
+> The `@google/genai` SDK reads `GEMINI_API_KEY` from the environment. Keep your key in `.env.local` (gitignored) locally and in Vercel's environment variables in production.
 
 ## How It Works
 
 1. **You paste a news story, headline, or claim**
 2. **One grounded search, three lenses** — a single Gemini call uses Google Search Grounding to gather progressive, conservative, and international coverage in one research pass
-3. **AI synthesis** — a second call extracts consensus facts, identifies spin per perspective, and writes a stripped-truth summary
+3. **AI synthesis** — a second, schema-constrained call structures the three lenses and extracts consensus facts, spin per perspective, and a stripped-truth summary
 4. **Visual comparison** — three columns show each perspective's coverage, sources, and unique claims
 5. **The truth layer** — the bottom section shows what every source agrees on — the factual skeleton beneath all editorial framing
 
@@ -82,9 +79,8 @@ Open [http://localhost:3000](http://localhost:3000) and paste a news headline.
 |----------|-------------|
 | [Architecture](docs/ARCHITECTURE.md) | System design, data flow, component hierarchy |
 | [Gemini Prompts](docs/GEMINI_PROMPTS.md) | Every AI prompt with reasoning |
-| [Deployment](docs/DEPLOYMENT.md) | Step-by-step Cloud Run deployment |
+| [Deployment](docs/DEPLOYMENT.md) | Step-by-step Vercel deployment |
 | [Environment Setup](docs/ENV_SETUP.md) | Authentication and environment variables |
-| [Demo Script](docs/DEMO_SCRIPT.md) | 2-minute hackathon presentation guide |
 | [Known Limitations](docs/KNOWN_LIMITATIONS.md) | Honest assessment of what doesn't work perfectly |
 
 ## Project Structure
@@ -98,8 +94,8 @@ news-triangulator/
 │   │   └── ui/              # Reusable UI primitives
 │   ├── hooks/               # Custom React hooks
 │   └── lib/                 # Core services, types, prompts
-├── Dockerfile               # Multi-stage Docker build
 ├── .env.example             # Environment variable template
+├── next.config.js           # Next.js configuration
 └── tailwind.config.ts       # Design tokens & theme
 ```
 

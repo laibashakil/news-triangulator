@@ -2,7 +2,7 @@
 
 This file documents every prompt sent to the Gemini API, the reasoning behind each prompt's structure, and how they chain together. **This is the single source of truth for all AI instructions.** Prompt changes should be made in [src/lib/prompts.ts](../src/lib/prompts.ts) — never in the service code.
 
-All calls run against **Gemini 2.5 Flash** on **Vertex AI** via the `@google/genai` SDK (`GoogleGenAI` client with `vertexai: true`).
+All calls run against **Gemini 2.5 Flash-Lite** via the **Gemini Developer API** using the `@google/genai` SDK (`GoogleGenAI` client with `apiKey`). The model is set by the `MODEL_ID` constant in [src/lib/gemini.ts](../src/lib/gemini.ts).
 
 ---
 
@@ -56,16 +56,16 @@ Respond with ONLY a JSON object, no markdown fencing, no preamble:
 - JSON-only instruction prevents markdown wrapping that would break parsing
 
 **Configuration**:
-- Model: `gemini-2.5-flash`
+- Model: `gemini-2.5-flash-lite`
 - Search Grounding: **DISABLED** (no live search needed — this is purely analytical)
-- `responseMimeType: 'application/json'`
+- `responseMimeType: 'application/json'` + `responseSchema` (constrained decoding guarantees valid JSON)
 - `maxOutputTokens: 8192`
 
 ---
 
 ## buildAllPerspectivesPrompt(query)
 
-**Purpose**: The one grounded research call. Retrieves progressive, conservative, and international coverage in a single `generateContent` request so the whole triangulation uses exactly one grounded-search round trip against quota.
+**Purpose**: The one grounded research call (`searchCoverage`). Instructs Gemini to research progressive, conservative, and international coverage in a single grounded `generateContent` request. Its output is treated as free-form **research text** that feeds the analysis call — the structuring into clean JSON happens there, not here.
 
 **Parameters**:
 - `query`: The user's input text
@@ -111,8 +111,8 @@ Rules:
 ```
 
 **Why one prompt instead of three parallel calls?**
-- Vertex AI charges and rate-limits per `generate_content` request, and grounded search calls count toward the stricter grounding quota. Bundling three lenses into one call uses one-third the quota budget of a parallel-fetch design.
-- Explicit per-lens output slots in the JSON schema keep the perspectives differentiated despite the single call.
+- The Gemini free tier rate-limits per `generate_content` request on a per-day basis. Bundling three lenses into one grounded call uses one-third the request budget of a parallel-fetch design.
+- Enumerating each lens explicitly with its own output slot keeps the perspectives differentiated despite the single call.
 - Search Grounding can still parallelize the underlying web fetches internally, so wall-clock latency stays reasonable.
 
 **Why list example outlets?**
@@ -122,10 +122,10 @@ Rules:
 - Single-word `tone` creates a clean, displayable badge without subjective paragraphs
 
 **Configuration**:
-- Model: `gemini-2.5-flash`
+- Model: `gemini-2.5-flash-lite`
 - Search Grounding: **ENABLED** (`tools: [{ googleSearch: {} }]`)
 - `maxOutputTokens: 8192`
-- Note: `responseMimeType: 'application/json'` is not set here because it is not currently supported alongside grounded search; the service parses JSON defensively from the response text instead.
+- Note: no `responseSchema`/`responseMimeType` here — constrained decoding cannot be combined with the `googleSearch` tool. The grounded output is captured as research text and structured in the next call instead.
 
 **Source Extraction**:
 Sources are NOT returned by the prompt — they're extracted from the `groundingMetadata.groundingChunks` array on each candidate in the API response and exposed on the result as `consultedSources`. This is more reliable than asking the model to list sources, because:
@@ -137,62 +137,52 @@ Sources are NOT returned by the prompt — they're extracted from the `grounding
 
 ---
 
-## buildSynthesisPrompt(perspectives)
+## buildAnalysisPrompt(researchText)
 
-**Purpose**: Takes the three perspective summaries from the grounded call and extracts consensus, spin, and stripped truth. This is the final call of the triangulation.
+**Purpose**: The single post-search call (`analyzeCoverage`). Takes the free-form research text from the grounded call and, in one schema-constrained pass, produces **both** the three structured lenses **and** the synthesis (consensus, spin, stripped truth). This is the final call of the triangulation.
 
 **Parameters**:
-- `perspectives`: Array of 3 `Perspective` objects (with summaries, unique claims, tone)
+- `researchText`: The grounded call's free-form write-up of coverage across the three lenses
 
 **Prompt Template**:
 ```
-You are analyzing three different perspectives on the same news story.
-Each perspective comes from a different ideological orientation of media coverage.
+Below are research notes on how a news story was covered across three ideological
+lenses (progressive, conservative, international). Work ONLY from these notes — do
+not add new facts, outlets, or claims. If a lens is thin, summarize what little is
+there rather than inventing detail.
 
-PROGRESSIVE PERSPECTIVE:
-Summary: ${perspectives[0].summary}
-Unique Claims: ${perspectives[0].uniqueClaims.join('; ')}
-Tone: ${perspectives[0].tone}
+Produce two things:
 
-CONSERVATIVE PERSPECTIVE:
-Summary: ${perspectives[1].summary}
-Unique Claims: ${perspectives[1].uniqueClaims.join('; ')}
-Tone: ${perspectives[1].tone}
+1. For each lens (progressive, conservative, international):
+   - summary: 2-3 paragraphs on how that lens covered the story
+   - uniqueClaims: 3-5 short framing points that lens emphasized
+   - tone: a single descriptive word
 
-INTERNATIONAL PERSPECTIVE:
-Summary: ${perspectives[2].summary}
-Unique Claims: ${perspectives[2].uniqueClaims.join('; ')}
-Tone: ${perspectives[2].tone}
+2. A cross-lens synthesis:
+   - consensusFacts: 4-8 factual statements that appear across all three lenses
+   - spinIndicators: for each lens, what it uniquely emphasized or spun
+   - strippedTruth: a 2-3 paragraph factual summary stripped of all editorial
+     framing, written like a neutral wire-service report
 
-Analyze these three perspectives and return ONLY a JSON object with no markdown fencing, no preamble:
-{
-  "consensusFacts": [
-    "Factual statement that all three perspectives agree on"
-  ],
-  "spinIndicators": {
-    "progressive":  ["What the progressive coverage uniquely emphasized or spun"],
-    "conservative": ["What the conservative coverage uniquely emphasized or spun"],
-    "international":["What the international coverage uniquely emphasized or spun"]
-  },
-  "strippedTruth": "A 2-3 paragraph factual summary stripped of all editorial framing..."
-}
-
-Rules:
-- consensusFacts should contain 4-8 facts that genuinely appear across all three perspectives
-- spinIndicators should highlight framing choices, NOT factual errors
-- strippedTruth must read like a wire service report: neutral, factual, no editorial voice
+RESEARCH NOTES:
+${researchText}
 ```
 
+**Why fold structuring and synthesis into one call?**
+- It halves the per-analysis request count (1 grounded + 1 analysis = **2 total**), which matters against the free-tier daily quota.
+- The single call sees the full research at once, so the lenses and the synthesis stay consistent with each other.
+- Passing a combined `responseSchema` (the three lens objects plus the synthesis fields) means constrained decoding returns complete, valid JSON every time — no flaky-JSON failures.
+
 **Why this prompt structure?**
-- Feeding the raw perspective data (not just summaries) gives the synthesis model maximum context
-- Separating `consensusFacts` from `spinIndicators` forces the model to distinguish between facts and framing
-- The "wire-service report" instruction for `strippedTruth` is more concrete and graspable than "be neutral"
-- Quantitative guidance (4-8 facts, 2-3 paragraphs) prevents both sparse and overwhelming output
+- "Work ONLY from these notes" keeps the model from hallucinating beyond what grounding found.
+- Separating `consensusFacts` from `spinIndicators` forces the model to distinguish facts from framing.
+- The "wire-service report" instruction for `strippedTruth` is more concrete than "be neutral."
+- Quantitative guidance (4-8 facts, 2-3 paragraphs) prevents both sparse and overwhelming output.
 
 **Configuration**:
-- Model: `gemini-2.5-flash`
-- Search Grounding: **DISABLED** (this call operates on already-gathered data, not live search)
-- `responseMimeType: 'application/json'`
+- Model: `gemini-2.5-flash-lite`
+- Search Grounding: **DISABLED** (operates on already-gathered research, not live search)
+- `responseMimeType: 'application/json'` + combined `responseSchema`
 - `maxOutputTokens: 8192`
 
 ---
@@ -204,31 +194,32 @@ User Input
     │
     ▼
 [Call 0 — optional, only if GEMINI_STORY_VALIDATION=true]
-    buildStoryValidationPrompt(query)
-    │ → validates input is a news query
-    │ → if invalid, returns error to user
+    buildStoryValidationPrompt(query)        ← responseSchema, no grounding
+    │ → validates input is a news query; if invalid, returns error to user
     │
     ▼
 [Call 1] buildAllPerspectivesPrompt(query)   ← Google Search Grounding
-    │ → returns { progressive, conservative, international }
+    │ → returns free-form research text across the three lenses
     │ → sources extracted from groundingMetadata
     │
     ▼
-[Call 2] buildSynthesisPrompt([progressive, conservative, international])
-    │ → returns consensusFacts, spinIndicators, strippedTruth
+[Call 2] buildAnalysisPrompt(researchText)   ← combined responseSchema, no grounding
+    │ → returns { progressive, conservative, international,
+    │            consensusFacts, spinIndicators, strippedTruth }
     │
     ▼
 TriangulationResult object assembled and returned to client
 ```
 
-Total Gemini calls per request: **2** (or **3** with validation enabled).
+Total Gemini calls per request: **2** (or **3** with validation enabled). Every call is wrapped in `generateWithRetry` for transient `503`/`500`/`429` backoff.
 
 ## JSON Parsing Strategy
 
-All prompts instruct Gemini to return "ONLY a JSON object with no markdown fencing, no preamble." Despite this, Gemini occasionally wraps responses in ` ```json ... ``` ` blocks. The `GeminiService` class handles this by:
+The non-grounded calls (validation and analysis) pass a `responseSchema`, so Gemini uses **constrained decoding** and returns syntactically valid JSON by construction. The `GeminiService` parser is still defensive as a backstop:
 
-1. Attempting `JSON.parse()` on the raw response text
-2. If that fails, stripping markdown code fences and attempting again
-3. If that also fails, throwing a `GeminiServiceError` with the raw response for debugging
+1. Attempt `JSON.parse()` on the raw response text
+2. If that fails, strip markdown code fences and retry
+3. If that fails, isolate the outermost `{ … }` and strip trailing commas, then retry
+4. If all fail, throw a `GeminiServiceError` with the raw response for debugging
 
-This defensive parsing is critical — malformed JSON should never reach the UI as a silent failure.
+Combining constrained decoding with defensive parsing means malformed JSON effectively never reaches the UI as a silent failure.

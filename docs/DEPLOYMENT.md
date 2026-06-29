@@ -1,189 +1,91 @@
-# Deployment Guide — Google Cloud Run
+# Deployment Guide — Vercel
 
-This guide walks you through deploying News Triangulator to **Google Cloud Run** from scratch. It assumes you have a Google Cloud project with billing enabled and the `gcloud` CLI installed, but have never deployed to Cloud Run before.
-
-The app calls Gemini 2.5 Flash through **Vertex AI** using **Application Default Credentials**, so there are no API keys to manage in Secret Manager — authentication is handled by a service account attached to the Cloud Run service.
+This guide walks you through deploying News Triangulator to **Vercel** on the free tier. The app calls Gemini through the **Gemini Developer API** using a single `GEMINI_API_KEY` environment variable — no Google Cloud project, billing, or service accounts required.
 
 ---
 
 ## Prerequisites
 
-- [Google Cloud SDK (gcloud CLI)](https://cloud.google.com/sdk/docs/install) installed and authenticated
-- A Google Cloud project with billing enabled
-- Docker installed locally (for building images, or use Cloud Build)
+- A [GitHub](https://github.com) account with this repo pushed to it
+- A free [Vercel](https://vercel.com) account (sign in with GitHub)
+- A free **Gemini API key** from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 
-## Step 1: Authenticate and Set Your Project
+## Step 1: Get a Gemini API Key
 
-```bash
-# Login to Google Cloud
-gcloud auth login
+1. Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+2. Click **Create API key** (no billing setup is required for the free tier).
+3. Copy the key — you'll paste it into Vercel in Step 3.
 
-# Set your project (replace with your project ID; must match VERTEX_PROJECT in src/lib/gemini.ts)
-gcloud config set project YOUR_PROJECT_ID
+> The free tier enforces a **per-day request quota that varies by model**. The app defaults to `gemini-2.5-flash-lite` (set as `MODEL_ID` in [src/lib/gemini.ts](../src/lib/gemini.ts)), which has a generous free daily allowance and supports Google Search grounding.
 
-# Enable required APIs
-gcloud services enable aiplatform.googleapis.com
-gcloud services enable run.googleapis.com
-gcloud services enable artifactregistry.googleapis.com
-gcloud services enable cloudbuild.googleapis.com
-```
+## Step 2: Import the Project into Vercel
 
-> If your project ID differs from `news-triangulator`, update the `VERTEX_PROJECT` constant in [src/lib/gemini.ts](../src/lib/gemini.ts) before building the image. `VERTEX_LOCATION` should match the region you plan to deploy in (default `us-central1`).
+1. Push your code to GitHub.
+2. At [vercel.com](https://vercel.com), click **Add New… → Project**.
+3. Import your `news-triangulator` repository.
+4. Vercel auto-detects Next.js — leave the default build settings:
+   - **Framework Preset**: Next.js
+   - **Build Command**: `next build` (default)
+   - **Install Command**: `pnpm install` (auto-detected from `pnpm-lock.yaml`)
+   - **Output Directory**: default
 
-## Step 2: Create a Runtime Service Account for Cloud Run
+## Step 3: Add the Environment Variable
 
-Instead of mounting an API key, we attach a dedicated service account to the Cloud Run service and grant it Vertex AI access.
+Before (or after) the first deploy, go to **Project Settings → Environment Variables** and add:
 
-```bash
-# Create the service account
-gcloud iam service-accounts create news-triangulator-runtime \
-  --display-name="News Triangulator Cloud Run runtime"
+| Name | Value | Environments |
+|------|-------|--------------|
+| `GEMINI_API_KEY` | your key from Step 1 | Production, Preview, Development |
 
-# Grab the full email (stash in a shell variable for the commands below)
-SA_EMAIL="news-triangulator-runtime@YOUR_PROJECT_ID.iam.gserviceaccount.com"
+> If you add it after the first deploy, trigger a redeploy so the new variable is picked up.
 
-# Grant it Vertex AI user access
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-  --member="serviceAccount:${SA_EMAIL}" \
-  --role="roles/aiplatform.user"
-```
+Optional variables:
 
-`roles/aiplatform.user` is sufficient to call `generateContent` with Google Search Grounding. No Secret Manager roles are needed.
-
-## Step 3: Create an Artifact Registry Repository
-
-```bash
-gcloud artifacts repositories create news-triangulator \
-  --repository-format=docker \
-  --location=us-central1 \
-  --description="News Triangulator container images"
-```
-
-## Step 4: Understand the Dockerfile
-
-The included `Dockerfile` uses a **multi-stage build**:
-
-```
-Stage 1 (builder):
-  - Base: node:20-alpine
-  - Installs pnpm
-  - Copies package files and installs dependencies
-  - Copies source code and builds the Next.js application
-  - The `output: 'standalone'` config produces a minimal build
-
-Stage 2 (runner):
-  - Base: node:20-alpine (clean image)
-  - Copies ONLY the standalone build output
-  - Does NOT copy source files or full node_modules
-  - Sets NODE_ENV=production
-  - Exposes port 8080 (Cloud Run default)
-  - Starts the server
-```
-
-This produces an image typically under 200MB — much smaller than copying the entire project.
-
-## Step 5: Build and Push the Container Image
-
-```bash
-# Configure Docker to use Artifact Registry
-gcloud auth configure-docker us-central1-docker.pkg.dev
-
-# Build the image (from the project root directory)
-docker build -t us-central1-docker.pkg.dev/YOUR_PROJECT_ID/news-triangulator/app:latest .
-
-# Push the image
-docker push us-central1-docker.pkg.dev/YOUR_PROJECT_ID/news-triangulator/app:latest
-```
-
-### Alternative: Build with Cloud Build (no local Docker needed)
-
-```bash
-gcloud builds submit --tag us-central1-docker.pkg.dev/YOUR_PROJECT_ID/news-triangulator/app:latest .
-```
-
-## Step 6: Deploy to Cloud Run
-
-```bash
-gcloud run deploy news-triangulator \
-  --image=us-central1-docker.pkg.dev/YOUR_PROJECT_ID/news-triangulator/app:latest \
-  --region=us-central1 \
-  --platform=managed \
-  --allow-unauthenticated \
-  --port=8080 \
-  --memory=512Mi \
-  --cpu=1 \
-  --min-instances=0 \
-  --max-instances=3 \
-  --service-account="${SA_EMAIL}" \
-  --set-env-vars="NODE_ENV=production,NEXT_PUBLIC_APP_URL=https://YOUR_SERVICE_URL"
-```
-
-**Flag explanations**:
-
-| Flag | Purpose |
+| Name | Purpose |
 |------|---------|
-| `--allow-unauthenticated` | Makes the service publicly accessible |
-| `--port=8080` | Cloud Run default port; matches Dockerfile EXPOSE |
-| `--memory=512Mi` | Sufficient for Next.js SSR + Gemini API calls |
-| `--min-instances=0` | Scale to zero when not in use (saves cost) |
-| `--max-instances=3` | Prevents runaway scaling (and quota abuse) |
-| `--service-account` | Runtime identity used for Vertex AI auth (set up in Step 2) |
+| `GEMINI_STORY_VALIDATION` | Set to `true` to enable the pre-flight "is this a news query?" check (adds one request per analysis). Off by default. |
+| `NEXT_PUBLIC_APP_URL` | Your deployed URL, if you want it referenced in client code/meta tags. |
 
-> Deliberately absent: `--set-secrets`. There is no API key to mount — Vertex AI credentials flow from the attached service account.
+## Step 4: Deploy
 
-## Step 7: Update the App URL
+Click **Deploy**. Vercel builds the app and assigns a URL like `https://news-triangulator-xxxx.vercel.app`.
 
-After deployment, Cloud Run assigns a URL like `https://news-triangulator-xxxxx-uc.a.run.app`. Update the deployment with this URL:
+Every push to the `main` branch triggers an automatic production redeploy. Pull requests get their own preview deployments.
+
+## Step 5: Verify
 
 ```bash
-# Get the service URL
-gcloud run services describe news-triangulator \
-  --region=us-central1 \
-  --format="value(status.url)"
+# Home page
+curl https://your-app.vercel.app
 
-# Update the environment variable with the actual URL
-gcloud run services update news-triangulator \
-  --region=us-central1 \
-  --set-env-vars="NEXT_PUBLIC_APP_URL=https://news-triangulator-xxxxx-uc.a.run.app"
-```
-
-## Step 8: Verify the Deployment
-
-```bash
-# Check the service status
-gcloud run services describe news-triangulator --region=us-central1
-
-# Hit the home page
-curl https://news-triangulator-xxxxx-uc.a.run.app
-
-# Test the API endpoint
-curl -X POST https://news-triangulator-xxxxx-uc.a.run.app/api/triangulate \
+# API endpoint
+curl -X POST https://your-app.vercel.app/api/triangulate \
   -H "Content-Type: application/json" \
   -d '{"query": "US Federal Reserve interest rate decision"}'
 ```
 
-## Updating the Deployment
+A successful response is `{"success": true, "data": { ... }}` with three perspectives, consensus facts, and the stripped-truth summary.
 
-To deploy a new version:
+## Local Development
 
 ```bash
-# Rebuild and push
-docker build -t us-central1-docker.pkg.dev/YOUR_PROJECT_ID/news-triangulator/app:latest .
-docker push us-central1-docker.pkg.dev/YOUR_PROJECT_ID/news-triangulator/app:latest
-
-# Redeploy (Cloud Run will pull the new :latest image)
-gcloud run deploy news-triangulator \
-  --image=us-central1-docker.pkg.dev/YOUR_PROJECT_ID/news-triangulator/app:latest \
-  --region=us-central1
+pnpm install
+cp .env.example .env.local      # then set GEMINI_API_KEY=... in .env.local
+pnpm dev
 ```
+
+Open [http://localhost:3000](http://localhost:3000). See [ENV_SETUP.md](ENV_SETUP.md) for environment-variable details.
 
 ## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| "Container failed to start" | Check logs: `gcloud run services logs read news-triangulator --region=us-central1` |
-| `PERMISSION_DENIED` calling Vertex AI | Confirm the runtime SA has `roles/aiplatform.user` on the project and that `aiplatform.googleapis.com` is enabled |
-| `Could not load the default credentials` in logs | The service was deployed without `--service-account`. Redeploy with the flag set to `${SA_EMAIL}` |
-| 429 `GEMINI_QUOTA_EXCEEDED` in API responses | Vertex AI per-minute quota hit — raise it in the Cloud Console or lower `--max-instances` |
-| Slow cold starts | Set `--min-instances=1` (costs more but eliminates cold starts) |
-| 503 errors under load | Increase `--max-instances` and `--memory` |
+| `GEMINI_API_KEY is not set` error | Add the variable in Vercel → Project Settings → Environment Variables, then redeploy. Locally, set it in `.env.local`. |
+| `429` / `GEMINI_QUOTA_EXCEEDED` | You hit the free-tier **daily** request quota. Wait for the reset (~24h), switch `MODEL_ID` to a model with a higher free quota, or reduce traffic. The app already retries transient rate spikes with backoff. |
+| `503` "high demand" / "try again in a moment" | Transient free-tier capacity throttling on Google's side. The app retries automatically; if it persists, wait a moment and retry. |
+| Build fails on Vercel | Run `pnpm build` locally to reproduce. The project does **not** use `output: 'standalone'` (that was for the old Docker image). |
+| Empty/odd results for a query | The story may have thin coverage from one lens, or the input wasn't a researchable news claim. Try a more specific headline. |
+
+---
+
+> **Migrated from Google Cloud Run.** This project previously deployed as a Docker image to Cloud Run using Vertex AI with Application Default Credentials. It now runs on Vercel with the key-based Gemini Developer API. The old `Dockerfile` is no longer used by this deployment path.
