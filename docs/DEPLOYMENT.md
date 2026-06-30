@@ -52,16 +52,18 @@ Optional:
 
 ## Step 4: Deploy
 
-Click **Deploy**. Vercel builds the app and assigns a URL like `https://news-triangulator-xxxx.vercel.app`. Every push to `main` triggers an automatic production redeploy; pull requests get preview deployments.
+Click **Deploy**. Every push to `main` triggers an automatic production redeploy; pull requests get preview deployments.
+
+The live deployment is at **[https://news-triangulator.vercel.app](https://news-triangulator.vercel.app)**.
 
 ## Step 5: Verify
 
 ```bash
 # Home page
-curl https://your-app.vercel.app
+curl https://news-triangulator.vercel.app
 
 # API endpoint
-curl -X POST https://your-app.vercel.app/api/triangulate \
+curl -X POST https://news-triangulator.vercel.app/api/triangulate \
   -H "Content-Type: application/json" \
   -d '{"query": "US Federal Reserve interest rate decision"}'
 ```

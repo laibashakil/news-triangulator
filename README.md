@@ -6,8 +6,11 @@ News Triangulator pairs **Tavily** (live news search) with **Groq** (fast LLM sy
 
 ## Live Deployment
 
+**[https://news-triangulator.vercel.app](https://news-triangulator.vercel.app)**
+
 | | |
 |---|---|
+| **URL** | https://news-triangulator.vercel.app |
 | **Platform** | Vercel (free tier) |
 | **Search** | Tavily API (free tier) |
 | **AI** | Groq — `llama-3.3-70b-versatile` (free tier) |
@@ -46,7 +49,7 @@ To deploy:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/news-triangulator.git
+git clone https://github.com/laibashakil/news-triangulator.git
 cd news-triangulator
 
 # Install dependencies
